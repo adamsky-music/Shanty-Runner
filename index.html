@@ -37,11 +37,15 @@
   const canvas = document.getElementById('gameCanvas');
   const ctx = canvas.getContext('2d');
 
-  // Уровни (высота Y) — скорректированы под высоту травы
-  const GROUND_Y = 155; 
-  const UPPER_Y = 85;
+  // Уровни (высота Y)
+  const GROUND_Y = 160; 
+  const UPPER_Y = 90;
 
-  const DOG_RENDER_SIZE = 60; // Размер Шанти на экране
+  // Размеры вырезки кадра из картинки 2048x2048
+  const FRAME_SIZE = 512; 
+  // Размер Шанти на экране
+  const DOG_RENDER_W = 64;
+  const DOG_RENDER_H = 64;
 
   let score = 0;
   let gameOver = false;
@@ -50,10 +54,10 @@
 
   // Игрок (Шанти)
   const dog = {
-    x: 50,
+    x: 40,
     y: GROUND_Y,
-    width: DOG_RENDER_SIZE,
-    height: DOG_RENDER_SIZE,
+    width: DOG_RENDER_W,
+    height: DOG_RENDER_H,
     vy: 0,
     gravity: 0.6,
     jumpForce: -11,
@@ -70,7 +74,7 @@
     cat: new Image()
   };
 
-  // Файл спрайтшита
+  // Файл должен называться shanti_spritesheet.png (в формате PNG с прозрачностью)
   sprites.shanti.src = 'shanti_spritesheet.png'; 
 
   let items = [];
@@ -157,23 +161,23 @@
     let frameY = 0;
 
     if (!dog.isGrounded) {
-      frameY = 1;
+      // ПРЫЖОК: Строка 2 (третий ряд)
+      frameY = 2; 
+      // Колонка 0 (взлет) если летим вверх, Колонка 1 (падение) если падаем вниз
       frameX = dog.vy < 0 ? 0 : 1; 
     } else {
-      frameY = 0;
-      frameX = Math.floor(frame / 6) % 4; 
+      // БЕГ: 8 кадров на строках 0 и 1
+      let runIndex = Math.floor(frame / 5) % 8; // Смена кадра каждые 5 игровых тиков
+      frameX = runIndex % 4;                    // Колонки 0, 1, 2, 3
+      frameY = Math.floor(runIndex / 4);         // Строка 0 (кадры 0-3) или Строка 1 (кадры 4-7)
     }
-
-    // Автоматически высчитываем точную ширину и высоту кадра
-    const frameW = sprites.shanti.width / 4;
-    const frameH = sprites.shanti.height / 2;
 
     ctx.drawImage(
       sprites.shanti,
-      frameX * frameW, frameY * frameH,
-      frameW, frameH,
-      dog.x, dog.y,
-      dog.width, dog.height
+      frameX * FRAME_SIZE, frameY * FRAME_SIZE, // Откуда вырезать из PNG
+      FRAME_SIZE, FRAME_SIZE,                   // Размер вырезки 512x512
+      dog.x, dog.y,                             // Куда нарисовать на экране
+      dog.width, dog.height                     // Размер на экране (64x64)
     );
   }
 
@@ -188,19 +192,19 @@
     ctx.setLineDash([5, 5]); ctx.beginPath(); ctx.moveTo(0, UPPER_Y + 40); ctx.lineTo(400, UPPER_Y + 40); ctx.stroke(); ctx.setLineDash([]);
 
     // Земля (трава)
-    ctx.fillStyle = '#4CAF50'; ctx.fillRect(0, 200, canvas.width, 50);
+    ctx.fillStyle = '#4CAF50'; ctx.fillRect(0, 205, canvas.width, 45);
 
     // Радуга за Шанти
     if (rainbowTimer > 0) {
       const colors = ['#FF0000', '#FF7F00', '#FFFF00', '#00FF00', '#0000FF', '#4B0082'];
-      colors.forEach((c, idx) => { ctx.fillStyle = c; ctx.fillRect(dog.x - 40, dog.y + 20 + (idx * 3), 40, 3); });
+      colors.forEach((c, idx) => { ctx.fillStyle = c; ctx.fillRect(dog.x - 35, dog.y + 20 + (idx * 2), 35, 2); });
     }
 
     // Отрисовка Шанти
     if (sprites.shanti.complete && sprites.shanti.naturalWidth !== 0) {
       drawShanti();
     } else {
-      ctx.font = '30px serif'; ctx.fillText('🐶', dog.x, dog.y + 35);
+      ctx.font = '30px serif'; ctx.fillText('🐶', dog.x, dog.y + 30);
     }
 
     // Отрисовка бонусов
