@@ -239,10 +239,6 @@
 
     ctx.imageSmoothingEnabled = false;
 
-    // Вспомогательная линия верхнего уровня
-    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
-    ctx.setLineDash([5, 5]); ctx.beginPath(); ctx.moveTo(0, UPPER_Y + 35); ctx.lineTo(400, UPPER_Y + 35); ctx.stroke(); ctx.setLineDash([]);
-
     // 2. Движущаяся земля
     drawGround();
 
