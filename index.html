@@ -50,6 +50,10 @@
   let frame = 0;
   let rainbowTimer = 0;
 
+  // Переменная для бесконечной прокрутки земли
+  let groundX = 0;
+  const GROUND_SPEED = 3; // Скорость бега травы (должна совпадать со скоростью предметов)
+
   // Игрок (Шанти)
   const dog = {
     x: 40,
@@ -66,6 +70,7 @@
   const sprites = {
     shanti: new Image(),
     bg: new Image(),
+    ground: new Image(),
     food: new Image(),
     water: new Image(),
     poop: new Image(),
@@ -73,9 +78,10 @@
     cat: new Image()
   };
 
-  // Файлы должны лежать в корне репозитория GitHub
+  // Файлы графики
   sprites.shanti.src = 'shanti_spritesheet.png'; 
   sprites.bg.src = 'bg.png';
+  sprites.ground.src = 'ground.png';
   sprites.food.src = 'food.png';
   sprites.water.src = 'water.png';
   sprites.poop.src = 'poop.png';
@@ -119,13 +125,16 @@
     }
 
     if (frame % 230 === 0 && Math.random() < 0.6) {
-      cats.push({ x: 440, y: GROUND_Y + 10, width: 48, height: 48, speed: 4 });
+      cats.push({ x: 440, y: GROUND_Y + 18, width: 36, height: 36, speed: 4 });
     }
   }
 
   function update() {
     if (gameOver) return;
     frame++;
+
+    // Сдвиг земли для эффекта бега
+    groundX = (groundX - GROUND_SPEED) % canvas.width;
 
     dog.vy += dog.gravity;
     dog.y += dog.vy;
@@ -141,7 +150,7 @@
     // Коллизии предметов
     for (let i = items.length - 1; i >= 0; i--) {
       let item = items[i];
-      item.x -= 3;
+      item.x -= GROUND_SPEED;
       if (Math.abs(dog.x - item.x) < 25 && Math.abs(dog.y - item.y) < 25) {
         if (item.type === 'food' || item.type === 'water') score += 1;
         else if (item.type === 'poop') score = Math.max(0, score - 2);
@@ -155,7 +164,7 @@
     for (let i = cats.length - 1; i >= 0; i--) {
       let cat = cats[i];
       cat.x -= cat.speed;
-      if (Math.abs(dog.x - cat.x) < 25 && Math.abs(dog.y - cat.y) < 25) { gameOver = true; }
+      if (Math.abs(dog.x - cat.x) < 22 && Math.abs(dog.y - cat.y) < 22) { gameOver = true; }
       if (cat.x < -40) cats.splice(i, 1);
     }
     spawnEntities();
@@ -186,13 +195,17 @@
     );
   }
 
-  // Отрисовка анимации кота (Сетка 8 столбцов x 5 строк)
   function drawCat(cat) {
-    let catFrameX = Math.floor(frame / 4) % 8; // Анимация из 8 кадров по горизонтали
-    let catFrameY = 0; // Первая строка бега кота
+    if (!sprites.cat.complete || sprites.cat.naturalWidth === 0) return;
 
-    const catFrameW = sprites.cat.width / 8; // 8 столбцов
-    const catFrameH = sprites.cat.height / 5; // 5 строк
+    const cols = 4;
+    const rows = 5;
+
+    const catFrameW = sprites.cat.naturalWidth / cols;
+    const catFrameH = sprites.cat.naturalHeight / rows;
+
+    let catFrameX = Math.floor(frame / 6) % cols; 
+    let catFrameY = 0; 
 
     ctx.drawImage(
       sprites.cat,
@@ -203,8 +216,20 @@
     );
   }
 
+  // Отрисовка зацикленного бега земли
+  function drawGround() {
+    if (sprites.ground.complete && sprites.ground.naturalWidth !== 0) {
+      // Рисуем две копии подряд, чтобы перекрыть весь экран при прокрутке
+      ctx.drawImage(sprites.ground, groundX, 205, canvas.width, 45);
+      ctx.drawImage(sprites.ground, groundX + canvas.width, 205, canvas.width, 45);
+    } else {
+      ctx.fillStyle = '#4CAF50';
+      ctx.fillRect(0, 205, canvas.width, 45);
+    }
+  }
+
   function draw() {
-    // 1. Отрисовка фона (или заливка небом)
+    // 1. Отрисовка статичного фона (небо)
     if (sprites.bg.complete && sprites.bg.naturalWidth !== 0) {
       ctx.drawImage(sprites.bg, 0, 0, canvas.width, canvas.height);
     } else {
@@ -218,8 +243,8 @@
     ctx.strokeStyle = 'rgba(255,255,255,0.3)';
     ctx.setLineDash([5, 5]); ctx.beginPath(); ctx.moveTo(0, UPPER_Y + 35); ctx.lineTo(400, UPPER_Y + 35); ctx.stroke(); ctx.setLineDash([]);
 
-    // Земля (трава)
-    ctx.fillStyle = '#4CAF50'; ctx.fillRect(0, 205, canvas.width, 45);
+    // 2. Движущаяся земля
+    drawGround();
 
     // Радуга за Шанти
     if (rainbowTimer > 0) {
@@ -271,7 +296,7 @@
   }
 
   function restart() {
-    score = 0; gameOver = false; items = []; cats = []; dog.y = GROUND_Y; dog.vy = 0; dog.isGrounded = true; frame = 0;
+    score = 0; gameOver = false; items = []; cats = []; dog.y = GROUND_Y; dog.vy = 0; dog.isGrounded = true; frame = 0; groundX = 0;
   }
 
   function loop() { update(); draw(); requestAnimationFrame(loop); }
