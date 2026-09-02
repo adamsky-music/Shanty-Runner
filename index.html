@@ -37,14 +37,11 @@
   const canvas = document.getElementById('gameCanvas');
   const ctx = canvas.getContext('2d');
 
-  // Уровни (высота Y)
-  const GROUND_Y = 190;
-  const UPPER_Y = 120;
+  // Уровни (высота Y) — скорректированы под высоту травы
+  const GROUND_Y = 155; 
+  const UPPER_Y = 85;
 
-  // Технические параметры спрайтшита Шанти
-  const SPRITE_W = 64;
-  const SPRITE_H = 64;
-  const DOG_RENDER_SIZE = 48;
+  const DOG_RENDER_SIZE = 60; // Размер Шанти на экране
 
   let score = 0;
   let gameOver = false;
@@ -96,24 +93,24 @@
 
   function spawnEntities() {
     if (frame % 70 === 0) {
-      const level = Math.random() > 0.5 ? GROUND_Y : UPPER_Y;
+      const level = Math.random() > 0.5 ? GROUND_Y + 15 : UPPER_Y + 15;
       const rand = Math.random();
-      const objParams = { x: 420, y: level, size: 22 };
+      const objParams = { x: 420, y: level, size: 24 };
 
-      if (level === GROUND_Y) {
+      if (level === GROUND_Y + 15) {
         if (rand < 0.4) items.push({ ...objParams, type: 'food' });
         else if (rand < 0.7) items.push({ ...objParams, type: 'water' });
-        else if (rand < 0.9) items.push({ ...objParams, type: 'poop', size: 18 });
-        else items.push({ ...objParams, type: 'cupcake', size: 24 });
+        else if (rand < 0.9) items.push({ ...objParams, type: 'poop', size: 20 });
+        else items.push({ ...objParams, type: 'cupcake', size: 26 });
       } else {
         if (rand < 0.45) items.push({ ...objParams, type: 'food' });
         else if (rand < 0.9) items.push({ ...objParams, type: 'water' });
-        else items.push({ ...objParams, type: 'cupcake', size: 24 });
+        else items.push({ ...objParams, type: 'cupcake', size: 26 });
       }
     }
 
     if (frame % 230 === 0 && Math.random() < 0.6) {
-      cats.push({ x: 440, y: GROUND_Y, width: 30, height: 30, speed: 4 });
+      cats.push({ x: 440, y: GROUND_Y + 15, width: 30, height: 30, speed: 4 });
     }
   }
 
@@ -149,7 +146,7 @@
     for (let i = cats.length - 1; i >= 0; i--) {
       let cat = cats[i];
       cat.x -= cat.speed;
-      if (Math.abs(dog.x - cat.x) < 20 && Math.abs(dog.y - cat.y) < 20) { gameOver = true; }
+      if (Math.abs(dog.x - cat.x) < 25 && Math.abs(dog.y - cat.y) < 25) { gameOver = true; }
       if (cat.x < -40) cats.splice(i, 1);
     }
     spawnEntities();
@@ -167,11 +164,15 @@
       frameX = Math.floor(frame / 6) % 4; 
     }
 
+    // Автоматически высчитываем точную ширину и высоту кадра
+    const frameW = sprites.shanti.width / 4;
+    const frameH = sprites.shanti.height / 2;
+
     ctx.drawImage(
       sprites.shanti,
-      frameX * SPRITE_W, frameY * SPRITE_H,
-      SPRITE_W, SPRITE_H,
-      dog.x - (DOG_RENDER_SIZE / 4), dog.y,
+      frameX * frameW, frameY * frameH,
+      frameW, frameH,
+      dog.x, dog.y,
       dog.width, dog.height
     );
   }
@@ -184,22 +185,22 @@
 
     // Вспомогательная линия верхнего уровня
     ctx.strokeStyle = 'rgba(255,255,255,0.3)';
-    ctx.setLineDash([5, 5]); ctx.beginPath(); ctx.moveTo(0, UPPER_Y + 25); ctx.lineTo(400, UPPER_Y + 25); ctx.stroke(); ctx.setLineDash([]);
+    ctx.setLineDash([5, 5]); ctx.beginPath(); ctx.moveTo(0, UPPER_Y + 40); ctx.lineTo(400, UPPER_Y + 40); ctx.stroke(); ctx.setLineDash([]);
 
-    // Земля
-    ctx.fillStyle = '#4CAF50'; ctx.fillRect(0, 215, canvas.width, 35);
+    // Земля (трава)
+    ctx.fillStyle = '#4CAF50'; ctx.fillRect(0, 200, canvas.width, 50);
 
     // Радуга за Шанти
     if (rainbowTimer > 0) {
       const colors = ['#FF0000', '#FF7F00', '#FFFF00', '#00FF00', '#0000FF', '#4B0082'];
-      colors.forEach((c, idx) => { ctx.fillStyle = c; ctx.fillRect(dog.x - 45, dog.y + 10 + (idx * 3), 45, 3); });
+      colors.forEach((c, idx) => { ctx.fillStyle = c; ctx.fillRect(dog.x - 40, dog.y + 20 + (idx * 3), 40, 3); });
     }
 
     // Отрисовка Шанти
-    if (sprites.shanti.complete) {
+    if (sprites.shanti.complete && sprites.shanti.naturalWidth !== 0) {
       drawShanti();
     } else {
-      ctx.font = '30px serif'; ctx.fillText('🐶', dog.x, dog.y + 25);
+      ctx.font = '30px serif'; ctx.fillText('🐶', dog.x, dog.y + 35);
     }
 
     // Отрисовка бонусов
