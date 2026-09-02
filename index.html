@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Shanti Runner</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+    body {
+      background: #212121;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      overflow: hidden;
+      font-family: system-ui, -apple-system, sans-serif;
+    }
+    #gameCanvas {
+      background: #87CEEB;
+      border-radius: 12px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+      max-width: 100%;
+      touch-action: manipulation;
+    }
+  </style>
+</head>
+<body>
+
+<canvas id="gameCanvas" width="400" height="250"></canvas>
+
+<script>
+  const tg = window.Telegram?.WebApp;
+  if (tg) tg.expand();
+
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+
+  // Уровни (высота Y)
+  const GROUND_Y = 190;
+  const UPPER_Y = 120;
+
+  // Технические параметры спрайтшита Шанти
+  const SPRITE_W = 64;
+  const SPRITE_H = 64;
+  const DOG_RENDER_SIZE = 48;
+
+  let score = 0;
+  let gameOver = false;
+  let frame = 0;
+  let rainbowTimer = 0;
+
+  // Игрок (Шанти)
+  const dog = {
+    x: 50,
+    y: GROUND_Y,
+    width: DOG_RENDER_SIZE,
+    height: DOG_RENDER_SIZE,
+    vy: 0,
+    gravity: 0.6,
+    jumpForce: -11,
+    isGrounded: true
+  };
+
+  // Загрузка изображений
+  const sprites = {
+    shanti: new Image(),
+    food: new Image(),
+    water: new Image(),
+    poop: new Image(),
+    cupcake: new Image(),
+    cat: new Image()
+  };
+
+  // Файл спрайтшита
+  sprites.shanti.src = 'shanti_spritesheet.png'; 
+
+  let items = [];
+  let cats = [];
+
+  function jump() {
+    if (gameOver) {
+      restart();
+      return;
+    }
+    if (dog.isGrounded) {
+      dog.vy = dog.jumpForce;
+      dog.isGrounded = false;
+    }
+  }
+
+  window.addEventListener('touchstart', (e) => { e.preventDefault(); jump(); }, { passive: false });
+  window.addEventListener('mousedown', jump);
+  window.addEventListener('keydown', (e) => { if (e.code === 'Space') jump(); });
+
+  function spawnEntities() {
+    if (frame % 70 === 0) {
+      const level = Math.random() > 0.5 ? GROUND_Y : UPPER_Y;
+      const rand = Math.random();
+      const objParams = { x: 420, y: level, size: 22 };
+
+      if (level === GROUND_Y) {
+        if (rand < 0.4) items.push({ ...objParams, type: 'food' });
+        else if (rand < 0.7) items.push({ ...objParams, type: 'water' });
+        else if (rand < 0.9) items.push({ ...objParams, type: 'poop', size: 18 });
+        else items.push({ ...objParams, type: 'cupcake', size: 24 });
+      } else {
+        if (rand < 0.45) items.push({ ...objParams, type: 'food' });
+        else if (rand < 0.9) items.push({ ...objParams, type: 'water' });
+        else items.push({ ...objParams, type: 'cupcake', size: 24 });
+      }
+    }
+
+    if (frame % 230 === 0 && Math.random() < 0.6) {
+      cats.push({ x: 440, y: GROUND_Y, width: 30, height: 30, speed: 4 });
+    }
+  }
+
+  function update() {
+    if (gameOver) return;
+    frame++;
+
+    dog.vy += dog.gravity;
+    dog.y += dog.vy;
+
+    if (dog.y >= GROUND_Y) {
+      dog.y = GROUND_Y;
+      dog.vy = 0;
+      dog.isGrounded = true;
+    }
+
+    if (rainbowTimer > 0) rainbowTimer--;
+
+    // Коллизии предметов
+    for (let i = items.length - 1; i >= 0; i--) {
+      let item = items[i];
+      item.x -= 3;
+      if (Math.abs(dog.x - item.x) < 25 && Math.abs(dog.y - item.y) < 25) {
+        if (item.type === 'food' || item.type === 'water') score += 1;
+        else if (item.type === 'poop') score = Math.max(0, score - 2);
+        else if (item.type === 'cupcake') { score += 10; rainbowTimer = 120; }
+        items.splice(i, 1); continue;
+      }
+      if (item.x < -30) items.splice(i, 1);
+    }
+
+    // Движение и коллизии котов
+    for (let i = cats.length - 1; i >= 0; i--) {
+      let cat = cats[i];
+      cat.x -= cat.speed;
+      if (Math.abs(dog.x - cat.x) < 20 && Math.abs(dog.y - cat.y) < 20) { gameOver = true; }
+      if (cat.x < -40) cats.splice(i, 1);
+    }
+    spawnEntities();
+  }
+
+  function drawShanti() {
+    let frameX = 0;
+    let frameY = 0;
+
+    if (!dog.isGrounded) {
+      frameY = 1;
+      frameX = dog.vy < 0 ? 0 : 1; 
+    } else {
+      frameY = 0;
+      frameX = Math.floor(frame / 6) % 4; 
+    }
+
+    ctx.drawImage(
+      sprites.shanti,
+      frameX * SPRITE_W, frameY * SPRITE_H,
+      SPRITE_W, SPRITE_H,
+      dog.x - (DOG_RENDER_SIZE / 4), dog.y,
+      dog.width, dog.height
+    );
+  }
+
+  function draw() {
+    ctx.fillStyle = '#87CEEB';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.imageSmoothingEnabled = false;
+
+    // Вспомогательная линия верхнего уровня
+    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+    ctx.setLineDash([5, 5]); ctx.beginPath(); ctx.moveTo(0, UPPER_Y + 25); ctx.lineTo(400, UPPER_Y + 25); ctx.stroke(); ctx.setLineDash([]);
+
+    // Земля
+    ctx.fillStyle = '#4CAF50'; ctx.fillRect(0, 215, canvas.width, 35);
+
+    // Радуга за Шанти
+    if (rainbowTimer > 0) {
+      const colors = ['#FF0000', '#FF7F00', '#FFFF00', '#00FF00', '#0000FF', '#4B0082'];
+      colors.forEach((c, idx) => { ctx.fillStyle = c; ctx.fillRect(dog.x - 45, dog.y + 10 + (idx * 3), 45, 3); });
+    }
+
+    // Отрисовка Шанти
+    if (sprites.shanti.complete) {
+      drawShanti();
+    } else {
+      ctx.font = '30px serif'; ctx.fillText('🐶', dog.x, dog.y + 25);
+    }
+
+    // Отрисовка бонусов
+    items.forEach(item => {
+      const img = sprites[item.type];
+      if (img && img.complete && img.src) {
+        ctx.drawImage(img, item.x, item.y, item.size, item.size);
+      } else {
+        let icon = '🥣';
+        if (item.type === 'water') icon = '💧';
+        if (item.type === 'poop') icon = '💩';
+        if (item.type === 'cupcake') icon = '🧁';
+        ctx.font = '24px serif'; ctx.fillText(icon, item.x, item.y + 20);
+      }
+    });
+
+    // Отрисовка кота
+    cats.forEach(cat => {
+      if (sprites.cat.complete && sprites.cat.src) {
+        ctx.drawImage(sprites.cat, cat.x, cat.y, cat.width, cat.height);
+      } else {
+        ctx.font = '28px serif'; ctx.fillText('🐈', cat.x, cat.y + 25);
+      }
+    });
+
+    // Счет
+    ctx.fillStyle = '#000'; ctx.font = 'bold 16px sans-serif'; ctx.fillText(`Очки: ${score}`, 15, 30);
+    
+    // Экран окончания игры
+    if (gameOver) {
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.7)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#FFF'; ctx.textAlign = 'center';
+      ctx.font = 'bold 24px sans-serif'; ctx.fillText('Игра окончена!', canvas.width / 2, 110);
+      ctx.font = '16px sans-serif'; ctx.fillText(`Итоговый счет: ${score}`, canvas.width / 2, 140);
+      ctx.fillText('Нажмите для рестарта', canvas.width / 2, 170); ctx.textAlign = 'left';
+    }
+  }
+
+  function restart() {
+    score = 0; gameOver = false; items = []; cats = []; dog.y = GROUND_Y; dog.vy = 0; dog.isGrounded = true; frame = 0;
+  }
+
+  function loop() { update(); draw(); requestAnimationFrame(loop); }
+
+  window.onload = loop;
+</script>
+</body>
+</html>
