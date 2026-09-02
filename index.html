@@ -175,21 +175,26 @@
     let frameY = 0;
 
     if (!dog.isGrounded) {
-      frameY = 2; // Строка 2 — Прыжок
+      frameY = 2; // Прыжок (строка 2)
       frameX = dog.vy < 0 ? 0 : 1; 
     } else {
       let runIndex = Math.floor(frame / 5) % 8; // 8 кадров бега
-      frameX = runIndex % 4;                    // Колонки 0-3
-      frameY = Math.floor(runIndex / 4);         // Строки 0 и 1
+      frameX = runIndex % 4;                    
+      frameY = Math.floor(runIndex / 4);         
     }
 
-    const frameW = sprites.shanti.width / 4;
-    const frameH = sprites.shanti.height / 4;
+    const rawFrameW = sprites.shanti.width / 4;
+    const rawFrameH = sprites.shanti.height / 4;
+
+    // Защитный отступ в 2 пикселя, чтобы не захватывать соседние строки
+    const pad = 2; 
 
     ctx.drawImage(
       sprites.shanti,
-      frameX * frameW, frameY * frameH,
-      frameW, frameH,
+      frameX * rawFrameW + pad,            // Сдвигаем точку старта вырезки X
+      frameY * rawFrameH + pad,            // Сдвигаем точку старта вырезки Y
+      rawFrameW - (pad * 2),               // Уменьшаем ширину вырезки на отступы
+      rawFrameH - (pad * 2),               // Уменьшаем высоту вырезки на отступы
       dog.x, dog.y,
       dog.width, dog.height
     );
