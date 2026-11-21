@@ -58,13 +58,30 @@ const loaded = Promise.all(Object.entries(FILES).map(([k, src]) => new Promise((
   im.src = src; img[k] = im;
 })));
 
-// ───────────────────────── Таблица лидеров ─────────────────────────
+// ───────────────────────── Таблица лидеров (локальная + глобальная Firebase) ─────────────────────────
+// Укажи свой URL Firebase Realtime Database (например 'https://my-app.firebaseio.com'), чтобы включить общий мировой Топ:
+const FIREBASE_URL = '';
 const LB_KEY = 'shanti_leaderboard_v1';
 let playerName = localStorage.getItem('shanti_player_name') || (tgUser && tgUser.first_name) || 'Шанти';
 function loadBoard() {
   try { const d = JSON.parse(localStorage.getItem(LB_KEY) || '[]'); return Array.isArray(d) ? d : []; } catch (e) { return []; }
 }
 let board = loadBoard();
+let globalBoard = [];
+async function fetchGlobalBoard() {
+  if (!FIREBASE_URL) return;
+  try {
+    const res = await fetch(FIREBASE_URL.replace(/\/$/, '') + '/shanti_leaderboard.json');
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data) return;
+    const arr = Object.values(data).filter(x => x && typeof x.score === 'number');
+    arr.sort((a, b) => b.score - a.score || (b.level || 1) - (a.level || 1));
+    globalBoard = arr.slice(0, 5);
+  } catch (e) {}
+}
+fetchGlobalBoard();
+
 function saveScore(sc, lvl) {
   if (sc <= 0) return -1;
   const entry = { name: playerName, score: sc, level: lvl, ts: Date.now() };
@@ -72,6 +89,13 @@ function saveScore(sc, lvl) {
   board.sort((a, b) => b.score - a.score || b.level - a.level);
   board = board.slice(0, 5);
   localStorage.setItem(LB_KEY, JSON.stringify(board));
+  if (FIREBASE_URL) {
+    fetch(FIREBASE_URL.replace(/\/$/, '') + '/shanti_leaderboard.json', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(entry)
+    }).then(() => fetchGlobalBoard()).catch(() => {});
+  }
   return board.findIndex(e => e.ts === entry.ts);
 }
 let lastRank = -1, showBoard = false, showShop = false, earnedCoins = 0;
@@ -176,6 +200,7 @@ const Sound = (() => {
     poop() { if (ac) envTone(220, ac.currentTime, 0.28, 'sawtooth', 0.12, master, 70, 900); },
     cupcake() { if (ac) { const t = ac.currentTime; [72,76,79,84,88,91].forEach((n, i) => envTone(midi(n), t + i * 0.055, 0.14, 'square', 0.11, master, null, 3000)); } },
     hit() { if (ac) { const t = ac.currentTime; noiseHit(t, 0.35, 0.2, 300); envTone(400, t, 0.48, 'sawtooth', 0.14, master, 60); } },
+    splash() { if (ac) { const t = ac.currentTime; noiseHit(t, 0.38, 0.24, 500); envTone(260, t, 0.26, 'sine', 0.16, master, 85); } },
     buy() { if (ac) { const t = ac.currentTime; envTone(988, t, 0.07, 'square', 0.12, master); envTone(1319, t + 0.06, 0.16, 'square', 0.13, master); } },
     nope() { if (ac) envTone(160, ac.currentTime, 0.12, 'triangle', 0.12, master, 110); },
   };
@@ -212,8 +237,8 @@ function buyUpgrade(idx) {
 let state = 'ready';
 let score = 0, level = 1, best = +localStorage.getItem('shanti_best') || 0;
 let tick = 0, speed = BASE_SPEED, groundX = 0, bgX = 0, rainbow = 0, shieldHits = 0, shake = 0, flash = 0;
-let items = [], cats = [], crows = [], parts = [], pops = [], trail = [];
-let spawnIn = 60, catIn = 240, crowIn = 320, overAt = 0, banner = { text: '', life: 0 };
+let items = [], cats = [], crows = [], gaps = [], logs = [], parts = [], pops = [], trail = [];
+let spawnIn = 60, catIn = 240, crowIn = 320, gapIn = 280, overAt = 0, banner = { text: '', life: 0 };
 
 // Живые детали фона (облака, птички, бабочки)
 const clouds = [
@@ -237,7 +262,8 @@ const dog = { h: 0, vy: 0, onGround: true, runT: 0, squash: 0, coyote: 0, buffer
 
 function reset() {
   score = 0; level = 1; tick = 0; speed = BASE_SPEED; rainbow = 0; shieldHits = upg.shield; shake = 0; flash = 0;
-  items = []; cats = []; crows = []; parts = []; pops = []; trail = []; spawnIn = 55; catIn = 230; crowIn = 260;
+  items = []; cats = []; crows = []; gaps = []; logs = []; parts = []; pops = []; trail = [];
+  spawnIn = 55; catIn = 230; crowIn = 260; gapIn = 260;
   banner = { text: '', life: 0 }; lastRank = -1; earnedCoins = 0; showShop = false; showBoard = false;
   dog.h = 0; dog.vy = 0; dog.onGround = true; dog.squash = 0; dog.landT = 0;
   dog.airJumps = upg.djump > 0 ? 1 : 0;
@@ -375,10 +401,29 @@ function spawnItems() {
 }
 
 function spawnCrow() {
-  // Ворона летит на втором (UPPER_Y) или третьем (SKY_Y) ярусе, когда есть двойной прыжок или с 2 уровня
   const high = upg.djump > 0 && Math.random() < 0.55;
   const baseY = high ? SKY_Y : UPPER_Y - 12;
   crows.push({ x: W + 70, y: baseY, baseY, w: 92, t: 0, extraSpeed: 2.2 + level * 0.35 });
+}
+
+function spawnGap() {
+  const wide = level >= 2 && Math.random() < 0.62;
+  const w = wide ? 290 + Math.random() * 110 : 135 + Math.random() * 38;
+  const gx = W + 60;
+  gaps.push({ x: gx, w, isRiver: true });
+  if (wide) {
+    const count = w > 350 ? 2 : 1;
+    for (let i = 0; i < count; i++) {
+      const lw = 96;
+      const lx = gx + (count === 1 ? w * 0.5 : (i === 0 ? w * 0.32 : w * 0.68));
+      logs.push({ x: lx, w: lw, ph: Math.random() * 6, drift: (Math.random() - 0.5) * 0.35 });
+      // Награда над бревном
+      const bType = Math.random() < 0.6 ? 'bone' : 'food';
+      const iw = ITEM_W[bType], im = img[bType];
+      const ih = im && im.naturalWidth ? iw * im.naturalHeight / im.naturalWidth : iw;
+      items.push({ type: bType, x: lx, cy: FLOOR - 85, w: iw, h: ih, bob: Math.random() * 6 });
+    }
+  }
 }
 
 function spawnCat() {
@@ -412,15 +457,47 @@ function update() {
   speed = Math.min(MAX_SPEED, BASE_SPEED + (level - 1) * 0.85 + tick / 2200);
   if (banner.life > 0) banner.life--;
 
+  // Определяем опору под лапами Шанти (бревно, пропасть/река или твёрдая земля)
+  let supportH = 0;
+  for (const g of gaps) {
+    if (DOG_X > g.x + 18 && DOG_X < g.x + g.w - 18) { supportH = -100; break; }
+  }
+  for (const l of logs) {
+    if (Math.abs(DOG_X - l.x) < l.w * 0.48 + 14 && dog.h >= 2 && dog.vy <= 0) {
+      supportH = 12 + Math.sin(tick * 0.1 + l.ph) * 2.5;
+      break;
+    }
+  }
+
+  if (dog.onGround && dog.h > supportH + 4) {
+    dog.onGround = false;
+    dog.coyote = 8;
+  }
+  if (dog.coyote > 0) dog.coyote--;
+
   if (!dog.onGround) {
     dog.vy -= GRAV; dog.h += dog.vy;
-    if (dog.h <= 0) {
-      dog.h = 0; dog.vy = 0; dog.onGround = true; dog.squash = 0.28; dog.landT = 7;
+    if (supportH >= 0 && dog.h <= supportH && dog.vy <= 0) {
+      dog.h = supportH; dog.vy = 0; dog.onGround = true; dog.squash = 0.28; dog.landT = 7;
       dog.airJumps = upg.djump > 0 ? 1 : 0;
       Sound.land();
-      for (let i = 0; i < 7; i++) dust(DOG_X - 10, FLOOR, 1);
+      for (let i = 0; i < 7; i++) dust(DOG_X - 10, FLOOR - supportH, 1);
       if (dog.buffer > 0) doJump();
+    } else if (dog.h < -38) {
+      if (shieldHits > 0) {
+        shieldHits--; dog.h = 8; dog.vy = JUMP_V * 1.05; dog.airJumps = upg.djump > 0 ? 1 : 0;
+        shake = 8; flash = 5; Sound.shieldBreak(); haptic('medium');
+        pop(DOG_X, FLOOR - 45, 'СПАСЕНИЕ!', '#70e0ff');
+        sparkle(DOG_X, FLOOR - 10, ['90,220,255', '255,255,255'], 18);
+      } else {
+        Sound.splash();
+        sparkle(DOG_X, FLOOR + 6, ['90,190,255', '220,245,255'], 22);
+        endRun();
+        return;
+      }
     }
+  } else if (supportH >= 0) {
+    dog.h = supportH;
   }
   if (dog.landT > 0) dog.landT--;
   if (dog.buffer > 0) dog.buffer--;
@@ -444,13 +521,33 @@ function update() {
     trail.pop();
   }
 
+  // Движение рек/пропастей и брёвен
+  for (let i = gaps.length - 1; i >= 0; i--) {
+    gaps[i].x -= speed;
+    if (gaps[i].x + gaps[i].w < -80) gaps.splice(i, 1);
+  }
+  for (let i = logs.length - 1; i >= 0; i--) {
+    logs[i].x -= speed - logs[i].drift;
+    if (logs[i].x + logs[i].w < -80) logs.splice(i, 1);
+  }
+
   if (--spawnIn <= 0) {
     spawnItems();
     spawnIn = Math.max(26, Math.floor((360 + Math.random() * 200) / speed));
   }
+  if (level >= 2 && --gapIn <= 0) {
+    const lastCat = cats[cats.length - 1];
+    if (!lastCat || lastCat.x < W - 180) {
+      spawnGap();
+      gapIn = Math.max(220, 400 - level * 22) + Math.random() * 180;
+      catIn = Math.max(catIn, 120);
+    } else gapIn = 30;
+  }
   if (--catIn <= 0) {
     const last = items[items.length - 1];
-    if (!last || last.x < W - 90) {
+    const lastGap = gaps[gaps.length - 1];
+    const nearGap = lastGap && lastGap.x + lastGap.w > W - 140;
+    if ((!last || last.x < W - 90) && !nearGap) {
       spawnCat();
       const minGap = Math.max(105, 220 - level * 14);
       catIn = minGap + Math.random() * Math.max(90, 210 - level * 12);
@@ -557,7 +654,7 @@ function update() {
 function endRun() {
   state = 'over'; overAt = performance.now(); shake = 14; flash = 10;
   dog.h = 0; dog.vy = 0; dog.onGround = true; dog.landT = 0;
-  banner.life = 0; cats = []; crows = []; trail = [];
+  banner.life = 0; cats = []; crows = []; gaps = []; logs = []; trail = [];
   Sound.hit(); Sound.setFast(false); Sound.musicStop(); haptic('heavy');
   if (score > best) { best = score; localStorage.setItem('shanti_best', best); }
   lastRank = saveScore(score, level);
@@ -659,6 +756,63 @@ function drawGround() {
     ctx.fill();
   }
   ctx.restore();
+
+  // Реки, пропасти и плывущие брёвна
+  for (const g of gaps) {
+    ctx.save();
+    // Вода в реке
+    const wg = ctx.createLinearGradient(0, GROUND_TOP + 12, 0, H);
+    wg.addColorStop(0, '#1e88e5');
+    wg.addColorStop(0.45, '#1565c0');
+    wg.addColorStop(1, '#0d3b78');
+    ctx.fillStyle = wg;
+    ctx.fillRect(g.x, GROUND_TOP + 12, g.w, H - GROUND_TOP);
+
+    // Анимированные волны и блики на воде
+    ctx.strokeStyle = 'rgba(180, 235, 255, 0.55)';
+    ctx.lineWidth = 2.5;
+    for (let row = 0; row < 3; row++) {
+      const wy = GROUND_TOP + 22 + row * 22;
+      ctx.beginPath();
+      for (let wx = g.x + 6; wx < g.x + g.w - 6; wx += 14) {
+        const yw = wy + Math.sin(wx * 0.08 + tick * 0.14 + row) * 3;
+        if (wx === g.x + 6) ctx.moveTo(wx, yw); else ctx.lineTo(wx, yw);
+      }
+      ctx.stroke();
+    }
+
+    // Скошенные земляные берега слева и справа
+    ctx.fillStyle = '#5c4028';
+    ctx.fillRect(g.x - 4, GROUND_TOP + 6, 12, H - GROUND_TOP);
+    ctx.fillRect(g.x + g.w - 8, GROUND_TOP + 6, 12, H - GROUND_TOP);
+    ctx.fillStyle = '#4c9a3c';
+    ctx.fillRect(g.x - 6, GROUND_TOP + 2, 16, 9);
+    ctx.fillRect(g.x + g.w - 10, GROUND_TOP + 2, 16, 9);
+    ctx.restore();
+  }
+
+  for (const l of logs) {
+    const ly = FLOOR - 12 - Math.sin(tick * 0.1 + l.ph) * 2.5;
+    ctx.save();
+    // Тень на воде
+    ctx.fillStyle = 'rgba(0, 30, 70, 0.35)';
+    ctx.beginPath(); ctx.ellipse(l.x, ly + 18, l.w * 0.5, 6, 0, 0, Math.PI * 2); ctx.fill();
+    // Бревно (кора)
+    ctx.fillStyle = '#794824';
+    ctx.strokeStyle = '#3b200c';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.roundRect(l.x - l.w / 2, ly - 4, l.w, 22, 10); ctx.fill(); ctx.stroke();
+    // Прожилки коры
+    ctx.strokeStyle = '#573114'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(l.x - l.w * 0.3, ly + 4); ctx.lineTo(l.x + l.w * 0.2, ly + 4);
+    ctx.moveTo(l.x - l.w * 0.15, ly + 11); ctx.lineTo(l.x + l.w * 0.32, ly + 11);
+    ctx.stroke();
+    // Светлый срез торца справа
+    ctx.fillStyle = '#d9a066';
+    ctx.beginPath(); ctx.ellipse(l.x + l.w / 2 - 5, ly + 7, 5, 9, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.restore();
+  }
 }
 
 function drawRainbow() {
@@ -887,17 +1041,19 @@ function drawShopModal() {
 }
 
 function drawLeaderboardModal() {
-  ctx.fillStyle = 'rgba(15, 10, 32, 0.82)'; ctx.fillRect(0, 0, W, H);
-  text('🏆 Таблица лидеров', W / 2, 85, 38, '#ffd24a');
-  if (board.length === 0) {
+  ctx.fillStyle = 'rgba(15, 10, 32, 0.86)'; ctx.fillRect(0, 0, W, H);
+  const activeBoard = (FIREBASE_URL && globalBoard.length > 0) ? globalBoard : board;
+  const title = FIREBASE_URL ? '🌍 Мировой Топ лидеров' : '🏆 Таблица лидеров';
+  text(title, W / 2, 78, 36, '#ffd24a');
+  if (activeBoard.length === 0) {
     text('Пока нет рекордов — сыграй первый забег!', W / 2, 220, 22, '#ddd');
   } else {
-    board.forEach((row, idx) => {
-      const y = 148 + idx * 42;
-      const isMe = idx === lastRank;
+    activeBoard.forEach((row, idx) => {
+      const y = 142 + idx * 42;
+      const isMe = !FIREBASE_URL && idx === lastRank;
       const col = isMe ? '#70e0ff' : (idx === 0 ? '#ffd24a' : '#fff');
       text(`${idx + 1}. ${row.name}`, W / 2 - 170, y, 22, col, 'left');
-      text(`Ур.${row.level}  •  ${row.score} очк.`, W / 2 + 170, y, 22, col, 'right');
+      text(`Ур.${row.level || 1}  •  ${row.score} очк.`, W / 2 + 170, y, 22, col, 'right');
     });
   }
   ctx.save();
