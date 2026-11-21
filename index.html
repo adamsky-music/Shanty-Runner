@@ -60,7 +60,7 @@ const loaded = Promise.all(Object.entries(FILES).map(([k, src]) => new Promise((
 
 // ───────────────────────── Таблица лидеров (локальная + глобальная Firebase) ─────────────────────────
 // Укажи свой URL Firebase Realtime Database (например 'https://my-app.firebaseio.com'), чтобы включить общий мировой Топ:
-const FIREBASE_URL = '';
+const FIREBASE_URL = 'https://shanty-runner-default-rtdb.firebaseio.com';
 const LB_KEY = 'shanti_leaderboard_v1';
 let playerName = localStorage.getItem('shanti_player_name') || (tgUser && tgUser.first_name) || 'Шанти';
 function loadBoard() {
@@ -283,7 +283,7 @@ function press(x, y) {
   Sound.init();
   if (x !== undefined) {
     if (x > W - 66 && y < 62) { Sound.toggle(); if (!Sound.muted && state === 'play') Sound.musicStart(); return; }
-    if (state !== 'play' && x > W - 124 && x <= W - 68 && y < 62) { showBoard = !showBoard; showShop = false; return; }
+    if (state !== 'play' && x > W - 124 && x <= W - 68 && y < 62) { showBoard = !showBoard; showShop = false; if (showBoard) fetchGlobalBoard(); return; }
     if (state !== 'play' && x > W - 182 && x <= W - 126 && y < 62) { showShop = !showShop; showBoard = false; return; }
     if (showShop && state !== 'play') {
       // Кнопки покупки по строкам (y = 112 + idx * 58, кнопка x: 580..720)
@@ -1091,11 +1091,12 @@ function draw() {
     text('Игра окончена!', W / 2, 96, 46, '#fff');
     text('Счёт: ' + score + '  •  Ур. ' + level + (score >= best && score > 0 ? '  🔥 Рекорд!' : ''), W / 2, 142, 23, '#ffe9a8');
     text('Заработано: +' + earnedCoins + ' 🪙   (Кошелёк: ' + coins + ' 🪙)', W / 2, 178, 20, '#70e0ff');
-    if (board.length > 0) {
-      text('🏆 Лучшие забеги:', W / 2, 224, 19, '#ffd24a');
-      board.slice(0, 3).forEach((r, idx) => {
-        const col = idx === lastRank ? '#70e0ff' : '#fff';
-        text(`${idx + 1}. ${r.name} — ${r.score} очк. (ур. ${r.level})`, W / 2, 256 + idx * 28, 18, col);
+    const activeOverBoard = (FIREBASE_URL && globalBoard.length > 0) ? globalBoard : board;
+    if (activeOverBoard.length > 0) {
+      text(FIREBASE_URL ? '🌍 Мировой Топ-3:' : '🏆 Лучшие забеги:', W / 2, 224, 19, '#ffd24a');
+      activeOverBoard.slice(0, 3).forEach((r, idx) => {
+        const col = (!FIREBASE_URL && idx === lastRank) ? '#70e0ff' : '#fff';
+        text(`${idx + 1}. ${r.name} — ${r.score} очк. (ур. ${r.level || 1})`, W / 2, 256 + idx * 28, 18, col);
       });
     }
     ctx.save();
