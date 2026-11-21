@@ -1,308 +1,966 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Shanti Runner</title>
-  <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
-    body {
-      background: #212121;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      height: 100vh;
-      overflow: hidden;
-      font-family: system-ui, -apple-system, sans-serif;
-    }
-    #gameCanvas {
-      background: #87CEEB;
-      border-radius: 12px;
-      box-shadow: 0 8px 24px rgba(0,0,0,0.3);
-      max-width: 100%;
-      touch-action: manipulation;
-    }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Shanti Runner</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; background: #14121c; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; font-family: system-ui, -apple-system, sans-serif; }
+  #gameCanvas {
+    width: 100%; max-width: 960px; max-height: 100vh; aspect-ratio: 8 / 5;
+    image-rendering: pixelated; touch-action: manipulation; background: #87CEEB;
+    border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.45);
+  }
+</style>
 </head>
 <body>
-
-<canvas id="gameCanvas" width="400" height="250"></canvas>
+<canvas id="gameCanvas" width="800" height="500"></canvas>
 
 <script>
-  const tg = window.Telegram?.WebApp;
-  if (tg) tg.expand();
+'use strict';
+// ───────────────────────── Настройки ─────────────────────────
+const W = 800, H = 500;
+const GROUND_TOP = 410;
+const FLOOR = 452;
+const DOG_X = 135;
+const DOG_SCALE = 0.48;
+const GRAV = 1.15, JUMP_V = 19.8;
+const BASE_SPEED = 6.0, MAX_SPEED = 13.5;
 
-  const canvas = document.getElementById('gameCanvas');
-  const ctx = canvas.getContext('2d');
+// Параметры спрайтшитов (tools/build_v3_assets.py, build_cat_v2.py, build_idle_and_crow.py)
+const DOG = { cw: 278, ch: 273, cols: 4, ax: 155, ay: 144, feet: 217, run: 8, jump: [8, 9], land: 10, sit: 11 };
+const DOG_IDLE = { cw: 456, ch: 471, cols: 4, frames: 4, ax: 199, feet: 463, scale: 0.28 };
+const CAT = { cw: 469, ch: 224, cols: 4, frames: 8, ax: 198, ay: 102, feet: 205 };
+const CROW = { cw: 411, ch: 339, cols: 4, frames: 4, ax: 95, ay: 170 };
 
-  // Уровни (высота Y)
-  const GROUND_Y = 160; 
-  const UPPER_Y = 90;
+const tg = window.Telegram && window.Telegram.WebApp;
+if (tg) { try { tg.ready(); tg.expand(); tg.disableVerticalSwipes && tg.disableVerticalSwipes(); } catch (e) {} }
+const haptic = (t) => { try { tg && tg.HapticFeedback && tg.HapticFeedback.impactOccurred(t); } catch (e) {} };
+const tgUser = tg && tg.initDataUnsafe && tg.initDataUnsafe.user;
 
-  // Размеры Шанти на экране
-  const DOG_RENDER_W = 64;
-  const DOG_RENDER_H = 64;
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
 
-  let score = 0;
-  let gameOver = false;
-  let frame = 0;
-  let rainbowTimer = 0;
+// ───────────────────────── Загрузка ─────────────────────────
+const FILES = {
+  dog: 'assets/shanti_v3_sheet.png', dogIdle: 'assets/shanti_idle_sheet.png',
+  cat: 'assets/cat_v2_sheet.png', crow: 'assets/crow_sheet.png',
+  bg: 'assets/bg_parallax.jpg', ground: 'assets/ground_v2.png',
+  food: 'assets/food.png', water: 'assets/water.png', poop: 'assets/poop.png', cupcake: 'assets/cupcake.png',
+  bone: 'assets/bone.png', shield: 'assets/shield.png'
+};
+const img = {};
+const loaded = Promise.all(Object.entries(FILES).map(([k, src]) => new Promise((res) => {
+  const im = new Image(); im.onload = () => res(); im.onerror = () => { console.warn('no image', src); res(); };
+  im.src = src; img[k] = im;
+})));
 
-  // Переменная для бесконечной прокрутки земли
-  let groundX = 0;
-  const GROUND_SPEED = 3; // Скорость бега травы (должна совпадать со скоростью предметов)
+// ───────────────────────── Таблица лидеров ─────────────────────────
+const LB_KEY = 'shanti_leaderboard_v1';
+let playerName = localStorage.getItem('shanti_player_name') || (tgUser && tgUser.first_name) || 'Шанти';
+function loadBoard() {
+  try { const d = JSON.parse(localStorage.getItem(LB_KEY) || '[]'); return Array.isArray(d) ? d : []; } catch (e) { return []; }
+}
+let board = loadBoard();
+function saveScore(sc, lvl) {
+  if (sc <= 0) return -1;
+  const entry = { name: playerName, score: sc, level: lvl, ts: Date.now() };
+  board.push(entry);
+  board.sort((a, b) => b.score - a.score || b.level - a.level);
+  board = board.slice(0, 5);
+  localStorage.setItem(LB_KEY, JSON.stringify(board));
+  return board.findIndex(e => e.ts === entry.ts);
+}
+let lastRank = -1, showBoard = false, showShop = false, earnedCoins = 0;
 
-  // Игрок (Шанти)
-  const dog = {
-    x: 40,
-    y: GROUND_Y,
-    width: DOG_RENDER_W,
-    height: DOG_RENDER_H,
-    vy: 0,
-    gravity: 0.6,
-    jumpForce: -11,
-    isGrounded: true
+// ───────────────────────── Многоинструментальная музыка и звук ─────────────────────────
+const Sound = (() => {
+  let ac = null, master = null, musicBus = null, muted = localStorage.getItem('shanti_muted') === '1';
+  let musicOn = false, nextT = 0, step = 0, timer = null, fastMode = false;
+
+  const init = () => {
+    if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
+    ac = new AC();
+    master = ac.createGain(); master.gain.value = muted ? 0 : 0.55; master.connect(ac.destination);
+    musicBus = ac.createGain(); musicBus.gain.value = 0.85; musicBus.connect(master);
   };
 
-  // Загрузка изображений
-  const sprites = {
-    shanti: new Image(),
-    bg: new Image(),
-    ground: new Image(),
-    food: new Image(),
-    water: new Image(),
-    poop: new Image(),
-    cupcake: new Image(),
-    cat: new Image()
+  const envTone = (f, t, d, type, vol, bus, slideTo, filterHz) => {
+    if (!ac) return;
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = type; o.frequency.setValueAtTime(f, t);
+    if (slideTo) o.frequency.exponentialRampToValueAtTime(Math.max(20, slideTo), t + d);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(vol, t + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+    if (filterHz) {
+      const flt = ac.createBiquadFilter(); flt.type = 'lowpass'; flt.frequency.value = filterHz;
+      o.connect(flt); flt.connect(g);
+    } else o.connect(g);
+    g.connect(bus || master);
+    o.start(t); o.stop(t + d + 0.02);
   };
 
-  // Файлы графики
-  sprites.shanti.src = 'shanti_spritesheet.png'; 
-  sprites.bg.src = 'bg.png';
-  sprites.ground.src = 'ground.png';
-  sprites.food.src = 'food.png';
-  sprites.water.src = 'water.png';
-  sprites.poop.src = 'poop.png';
-  sprites.cupcake.src = 'cupcake.png';
-  sprites.cat.src = 'cat_spritesheet.png'; 
+  const noiseHit = (t, d, vol, hpHz = 1000, bus) => {
+    if (!ac) return;
+    const n = Math.floor(ac.sampleRate * d), b = ac.createBuffer(1, n, ac.sampleRate), c = b.getChannelData(0);
+    for (let i = 0; i < n; i++) c[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 1.5);
+    const s = ac.createBufferSource(), g = ac.createGain(), flt = ac.createBiquadFilter();
+    flt.type = 'highpass'; flt.frequency.value = hpHz;
+    s.buffer = b; g.gain.value = vol;
+    s.connect(flt); flt.connect(g); g.connect(bus || master); s.start(t);
+  };
 
-  let items = [];
-  let cats = [];
+  const kick = (t) => envTone(135, t, 0.14, 'sine', 0.24, musicBus, 42);
+  const snare = (t) => { noiseHit(t, 0.11, 0.11, 1200, musicBus); envTone(190, t, 0.07, 'triangle', 0.1, musicBus, 90); };
+  const hat = (t, open) => noiseHit(t, open ? 0.08 : 0.03, open ? 0.045 : 0.03, 5500, musicBus);
 
-  function jump() {
-    if (gameOver) {
-      restart();
+  const midi = (n) => 440 * Math.pow(2, (n - 69) / 12);
+
+  const LEAD = [
+    76,0,79,84, 0,83,84,0, 79,0,76,72, 74,0,76,0,
+    77,0,81,84, 0,83,81,0, 79,0,74,79, 83,0,79,0,
+    76,79,83,0, 84,0,81,0, 77,81,84,0, 86,0,83,0,
+    84,0,88,84, 81,0,79,76, 74,77,81,0, 79,0,0,0
+  ];
+  const ARP = [
+    60,64,67,64, 60,64,67,64, 57,60,64,60, 57,60,64,60,
+    53,57,60,57, 53,57,60,57, 55,59,62,59, 55,59,62,59,
+    52,55,59,55, 57,60,64,60, 53,57,60,57, 50,53,57,53,
+    60,64,67,64, 57,60,64,60, 50,53,57,53, 55,59,62,65
+  ];
+  const BASS = [
+    48,0,60,0, 48,0,55,0, 45,0,57,0, 45,0,52,0,
+    41,0,53,0, 41,0,48,0, 43,0,55,0, 43,50,55,59,
+    40,0,52,0, 45,0,57,0, 41,0,53,0, 38,0,50,0,
+    48,0,60,0, 45,0,57,0, 38,0,50,0, 43,0,55,0
+  ];
+
+  const sched = () => {
+    if (!ac || !musicOn) return;
+    const tempo = fastMode ? 0.112 : 0.138;
+    while (nextT < ac.currentTime + 0.28) {
+      const i = step % 64;
+      const lm = LEAD[i];
+      if (lm) envTone(midi(lm + (fastMode ? 12 : 0)), nextT, tempo * 1.75, 'square', 0.052, musicBus, null, 2400);
+      const am = ARP[i];
+      if (am) envTone(midi(am), nextT, tempo * 0.95, 'triangle', 0.048, musicBus);
+      const bm = BASS[i];
+      if (bm) envTone(midi(bm), nextT, tempo * 1.45, 'sawtooth', 0.085, musicBus, null, 520);
+      if (i % 4 === 0) kick(nextT);
+      if (i % 8 === 4) snare(nextT);
+      if (i % 2 === 1) hat(nextT, i % 4 === 3);
+      nextT += tempo;
+      step++;
+    }
+  };
+
+  return {
+    init,
+    get muted() { return muted; },
+    setFast(v) { fastMode = v; },
+    toggle() { muted = !muted; localStorage.setItem('shanti_muted', muted ? '1' : '0'); if (master) master.gain.value = muted ? 0 : 0.55; },
+    musicStart() { init(); if (!ac || musicOn) return; musicOn = true; nextT = ac.currentTime + 0.05; step = 0; timer = setInterval(sched, 60); },
+    musicStop() { musicOn = false; clearInterval(timer); },
+    jump() { init(); if (ac) envTone(310, ac.currentTime, 0.17, 'square', 0.11, master, 720, 2200); },
+    land() { if (ac) noiseHit(ac.currentTime, 0.055, 0.06, 400); },
+    collect() { if (ac) { const t = ac.currentTime; envTone(880, t, 0.08, 'square', 0.11, master); envTone(1320, t + 0.065, 0.12, 'square', 0.11, master); } },
+    bone() { if (ac) { const t = ac.currentTime; [76,80,83,88].forEach((n, i) => envTone(midi(n), t + i * 0.045, 0.11, 'triangle', 0.14, master)); } },
+    shield() { if (ac) { const t = ac.currentTime; [60,67,72,79].forEach((n, i) => envTone(midi(n), t + i * 0.05, 0.16, 'sine', 0.15, master)); } },
+    shieldBreak() { if (ac) { const t = ac.currentTime; noiseHit(t, 0.18, 0.14, 1500); envTone(620, t, 0.22, 'sawtooth', 0.12, master, 180); } },
+    levelUp() { if (ac) { const t = ac.currentTime; [60,64,67,72,76].forEach((n, i) => envTone(midi(n), t + i * 0.06, 0.14, 'square', 0.09, master, null, 2500)); } },
+    poop() { if (ac) envTone(220, ac.currentTime, 0.28, 'sawtooth', 0.12, master, 70, 900); },
+    cupcake() { if (ac) { const t = ac.currentTime; [72,76,79,84,88,91].forEach((n, i) => envTone(midi(n), t + i * 0.055, 0.14, 'square', 0.11, master, null, 3000)); } },
+    hit() { if (ac) { const t = ac.currentTime; noiseHit(t, 0.35, 0.2, 300); envTone(400, t, 0.48, 'sawtooth', 0.14, master, 60); } },
+    buy() { if (ac) { const t = ac.currentTime; envTone(988, t, 0.07, 'square', 0.12, master); envTone(1319, t + 0.06, 0.16, 'square', 0.13, master); } },
+    nope() { if (ac) envTone(160, ac.currentTime, 0.12, 'triangle', 0.12, master, 110); },
+  };
+})();
+
+// ───────────────────────── Магазин и валюта ─────────────────────────
+let coins = +localStorage.getItem('shanti_coins') || 0;
+let upg = (() => {
+  try { return Object.assign({ shield: 0, magnet: 0, djump: 0, luck: 0, coin: 0 }, JSON.parse(localStorage.getItem('shanti_upgrades_v1') || '{}')); }
+  catch (e) { return { shield: 0, magnet: 0, djump: 0, luck: 0, coin: 0 }; }
+})();
+const SHOP_ITEMS = [
+  { key: 'shield', icon: '🛡️', name: 'Стартовый щит',    desc: 'Щит на старте (до 3 зарядов)', costs: [25, 70, 150] },
+  { key: 'magnet', icon: '🧲', name: 'Магнит вкусняшек', desc: 'Притягивает бонусы (без какашек)', costs: [20, 45, 90, 160, 260] },
+  { key: 'djump',  icon: '🦘', name: 'Двойной прыжок',   desc: 'Прыжок в воздухе + высота',      costs: [35, 90, 180] },
+  { key: 'luck',   icon: '🧁', name: 'Сладкоежка',       desc: 'Чаще бонусы и дольше радуга',    costs: [20, 45, 85, 140, 220] },
+  { key: 'coin',   icon: '🪙', name: 'Золотой ошейник',  desc: '+25% монет после забега',        costs: [25, 55, 100, 170, 260] },
+];
+function buyUpgrade(idx) {
+  const item = SHOP_ITEMS[idx];
+  const lvl = upg[item.key];
+  if (lvl >= item.costs.length) { Sound.nope(); return; }
+  const price = item.costs[lvl];
+  if (coins < price) { Sound.nope(); return; }
+  coins -= price;
+  upg[item.key] = lvl + 1;
+  localStorage.setItem('shanti_coins', coins);
+  localStorage.setItem('shanti_upgrades_v1', JSON.stringify(upg));
+  Sound.buy();
+  haptic('medium');
+}
+
+// ───────────────────────── Состояние ─────────────────────────
+let state = 'ready';
+let score = 0, level = 1, best = +localStorage.getItem('shanti_best') || 0;
+let tick = 0, speed = BASE_SPEED, groundX = 0, bgX = 0, rainbow = 0, shieldHits = 0, shake = 0, flash = 0;
+let items = [], cats = [], crows = [], parts = [], pops = [], trail = [];
+let spawnIn = 60, catIn = 240, crowIn = 320, overAt = 0, banner = { text: '', life: 0 };
+
+// Живые детали фона (облака, птички, бабочки)
+const clouds = [
+  { x: 90, y: 62, s: 1.0, sp: 0.35 },
+  { x: 340, y: 42, s: 0.72, sp: 0.22 },
+  { x: 560, y: 82, s: 1.15, sp: 0.42 },
+  { x: 760, y: 52, s: 0.85, sp: 0.28 },
+];
+const birds = [
+  { x: 220, y: 115, sp: 0.9, ph: 0 },
+  { x: 248, y: 128, sp: 0.9, ph: 1.5 },
+  { x: 610, y: 95, sp: 0.7, ph: 3.1 },
+];
+const butterflies = [
+  { x: 140, y: 382, ph: 0, col: '#ffe066' },
+  { x: 460, y: 372, ph: 2.2, col: '#ff9ae0' },
+  { x: 690, y: 388, ph: 4.1, col: '#80e5ff' },
+];
+
+const dog = { h: 0, vy: 0, onGround: true, runT: 0, squash: 0, coyote: 0, buffer: 0, landT: 0, airJumps: 0 };
+
+function reset() {
+  score = 0; level = 1; tick = 0; speed = BASE_SPEED; rainbow = 0; shieldHits = upg.shield; shake = 0; flash = 0;
+  items = []; cats = []; crows = []; parts = []; pops = []; trail = []; spawnIn = 55; catIn = 230; crowIn = 260;
+  banner = { text: '', life: 0 }; lastRank = -1; earnedCoins = 0; showShop = false; showBoard = false;
+  dog.h = 0; dog.vy = 0; dog.onGround = true; dog.squash = 0; dog.landT = 0;
+  dog.airJumps = upg.djump > 0 ? 1 : 0;
+  Sound.setFast(false);
+}
+
+// ───────────────────────── Ввод ─────────────────────────
+function editName() {
+  const n = prompt('Твоё имя для таблицы лидеров:', playerName);
+  if (n && n.trim()) {
+    playerName = n.trim().slice(0, 14);
+    localStorage.setItem('shanti_player_name', playerName);
+  }
+}
+
+function press(x, y) {
+  Sound.init();
+  if (x !== undefined) {
+    if (x > W - 66 && y < 62) { Sound.toggle(); if (!Sound.muted && state === 'play') Sound.musicStart(); return; }
+    if (state !== 'play' && x > W - 124 && x <= W - 68 && y < 62) { showBoard = !showBoard; showShop = false; return; }
+    if (state !== 'play' && x > W - 182 && x <= W - 126 && y < 62) { showShop = !showShop; showBoard = false; return; }
+    if (showShop && state !== 'play') {
+      // Кнопки покупки по строкам (y = 112 + idx * 58, кнопка x: 580..720)
+      for (let i = 0; i < SHOP_ITEMS.length; i++) {
+        const ry = 104 + i * 58;
+        if (x >= 575 && x <= 730 && y >= ry && y <= ry + 48) { buyUpgrade(i); return; }
+      }
+      // Кнопка "Играть" внизу магазина
+      if (x >= W / 2 - 110 && x <= W / 2 + 110 && y >= 418 && y <= 462) { showShop = false; state = 'play'; reset(); Sound.musicStart(); return; }
+      if (y < 62 || y > 465 || x < 55 || x > W - 55) showShop = false;
       return;
     }
-    if (dog.isGrounded) {
-      dog.vy = dog.jumpForce;
-      dog.isGrounded = false;
+    if (showBoard && state !== 'play') {
+      if (x > W / 2 - 90 && x < W / 2 + 90 && y > 375 && y < 420) { editName(); return; }
+      showBoard = false; return;
+    }
+    if (state === 'over') {
+      if (performance.now() - overAt <= 500) return;
+      if (x >= 265 && x <= 455 && y >= 375 && y <= 425) { showShop = true; return; }
+      state = 'play'; reset(); Sound.musicStart(); return;
+    }
+    if (state === 'ready') {
+      if (x >= W / 2 - 105 && x <= W / 2 + 105 && y >= 355 && y <= 402) { showShop = true; return; }
     }
   }
+  if ((showBoard || showShop) && state !== 'play') { showBoard = false; showShop = false; return; }
+  if (state === 'ready') { state = 'play'; reset(); Sound.musicStart(); return; }
+  if (state === 'over') { if (performance.now() - overAt > 500) { state = 'play'; reset(); Sound.musicStart(); } return; }
+  doJump();
+}
 
-  window.addEventListener('touchstart', (e) => { e.preventDefault(); jump(); }, { passive: false });
-  window.addEventListener('mousedown', jump);
-  window.addEventListener('keydown', (e) => { if (e.code === 'Space') jump(); });
+function doJump() {
+  if (dog.onGround || dog.coyote > 0) {
+    dog.vy = JUMP_V + upg.djump * 0.65;
+    dog.onGround = false; dog.coyote = 0; dog.squash = -0.25;
+    dog.airJumps = upg.djump > 0 ? 1 : 0;
+    Sound.jump(); haptic('light');
+    for (let i = 0; i < 6; i++) dust(DOG_X - 30, FLOOR, 1.4);
+  } else if (dog.airJumps > 0) {
+    dog.airJumps--;
+    dog.vy = JUMP_V * 0.92 + upg.djump * 0.5;
+    dog.squash = -0.2;
+    Sound.jump(); haptic('light');
+    sparkle(DOG_X - 10, FLOOR - dog.h - 10, ['130,220,255', '255,230,120'], 10);
+  } else dog.buffer = 8;
+}
+function pointer(e) {
+  const r = canvas.getBoundingClientRect(), t = e.touches ? e.touches[0] : e;
+  press((t.clientX - r.left) * W / r.width, (t.clientY - r.top) * H / r.height);
+}
+canvas.addEventListener('touchstart', (e) => { e.preventDefault(); pointer(e); }, { passive: false });
+canvas.addEventListener('mousedown', pointer);
+window.addEventListener('keydown', (e) => { if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); if (!e.repeat) press(); } });
 
-  function spawnEntities() {
-    if (frame % 70 === 0) {
-      const level = Math.random() > 0.5 ? GROUND_Y + 15 : UPPER_Y + 15;
-      const rand = Math.random();
-      const objParams = { x: 420, y: level, size: 28 };
+// ───────────────────────── Эффекты ─────────────────────────
+function dust(x, y, k = 1) {
+  parts.push({ x: x + Math.random() * 10, y: y - 2, vx: -speed * 0.45 - Math.random() * 1.5, vy: -Math.random() * 1.6 * k,
+    life: 22 + Math.random() * 10, max: 32, r: 3 + Math.random() * 4, col: '230,215,185' });
+}
+function sparkle(x, y, cols, n = 14) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, s = 2 + Math.random() * 4.5;
+    parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 1, life: 28, max: 28, r: 2.5 + Math.random() * 3, col: cols[i % cols.length], g: 0.12 });
+  }
+}
+function stinkWave(x, y) {
+  parts.push({ x: x + (Math.random() - 0.5) * 18, y: y - 14, vx: -speed * 0.85, vy: -0.9 - Math.random() * 0.5,
+    life: 26, max: 26, r: 3 + Math.random() * 2, col: '130,175,65', g: -0.02 });
+}
+function pop(x, y, text, col) { pops.push({ x, y, text, col, life: 52 }); }
 
-      if (level === GROUND_Y + 15) {
-        if (rand < 0.4) items.push({ ...objParams, type: 'food' });
-        else if (rand < 0.7) items.push({ ...objParams, type: 'water' });
-        else if (rand < 0.9) items.push({ ...objParams, type: 'poop', size: 24 });
-        else items.push({ ...objParams, type: 'cupcake', size: 30 });
+// ───────────────────────── Спавн ─────────────────────────
+const ITEM_W = { food: 44, water: 44, poop: 36, cupcake: 46, bone: 44, shield: 40 };
+const UPPER_Y = FLOOR - 175;
+const SKY_Y = FLOOR - 295;  // высокий ярус для двойного прыжка!
+
+function spawnItems() {
+  const rollTier = Math.random();
+  // Высокий ярус появляется чаще при прокачанном двойном прыжке (и иногда как заманка)
+  const skyChance = upg.djump > 0 ? 0.28 : 0.10;
+  const tier = rollTier < skyChance ? 'sky' : (rollTier < skyChance + 0.42 ? 'upper' : 'ground');
+  const r = Math.random();
+  const rareBoost = upg.luck * 0.025;
+  let type;
+  if (tier === 'sky') {
+    if (r < 0.55) type = 'bone';
+    else if (r < 0.80) type = 'cupcake';
+    else if (r < 0.92) type = 'shield';
+    else type = 'food';
+  } else if (tier === 'upper') {
+    if (r < 0.40 - rareBoost) type = 'food';
+    else if (r < 0.78 - rareBoost * 1.4) type = 'water';
+    else if (r < 0.90 - rareBoost * 0.4) type = 'bone';
+    else if (r < 0.96 - rareBoost * 0.2) type = 'cupcake';
+    else type = 'shield';
+  } else {
+    if (r < 0.32 - rareBoost * 0.5) type = 'food';
+    else if (r < 0.58 - rareBoost) type = 'water';
+    else if (r < 0.80 - rareBoost) type = 'poop';
+    else if (r < 0.91 - rareBoost * 0.3) type = 'bone';
+    else if (r < 0.96 - rareBoost * 0.15) type = 'cupcake';
+    else type = 'shield';
+  }
+  const single = (type === 'cupcake' || type === 'poop' || type === 'shield');
+  const n = single ? 1 : 1 + (Math.random() < 0.5 ? 1 : 0) + (Math.random() < 0.25 ? 1 : 0);
+  for (let i = 0; i < n; i++) {
+    const w = ITEM_W[type], im = img[type];
+    const h = im && im.naturalWidth ? w * im.naturalHeight / im.naturalWidth : w;
+    let cy;
+    if (tier === 'sky') cy = SKY_Y - Math.sin(i / Math.max(1, n - 1) * Math.PI) * 16;
+    else if (tier === 'upper') cy = UPPER_Y - Math.sin(i / Math.max(1, n - 1) * Math.PI) * 18;
+    else cy = FLOOR - h / 2 + 2;
+    items.push({ type, x: W + 40 + i * 68, cy, w, h, bob: Math.random() * 6 });
+  }
+}
+
+function spawnCrow() {
+  // Ворона летит на втором (UPPER_Y) или третьем (SKY_Y) ярусе, когда есть двойной прыжок или с 2 уровня
+  const high = upg.djump > 0 && Math.random() < 0.55;
+  const baseY = high ? SKY_Y : UPPER_Y - 12;
+  crows.push({ x: W + 70, y: baseY, baseY, w: 92, t: 0, extraSpeed: 2.2 + level * 0.35 });
+}
+
+function spawnCat() {
+  const fast = level >= 2 && Math.random() < Math.min(0.45, 0.15 + level * 0.07);
+  cats.push({ x: W + 70, w: fast ? 132 : 122, t: 0, extraSpeed: fast ? 4.4 : 2.8, fast });
+  if (level >= 2 && Math.random() < 0.45) {
+    const bonusType = Math.random() < 0.5 ? 'bone' : 'food';
+    const w = ITEM_W[bonusType], im = img[bonusType];
+    const h = im && im.naturalWidth ? w * im.naturalHeight / im.naturalWidth : w;
+    items.push({ type: bonusType, x: W + 60, cy: UPPER_Y - 10, w, h, bob: Math.random() * 6 });
+  }
+}
+
+// ───────────────────────── Обновление ─────────────────────────
+function update() {
+  groundX = (groundX + speed) % W;
+  bgX = (bgX + speed * 0.24) % W;
+  clouds.forEach(c => { c.x -= c.sp + speed * 0.06; if (c.x < -120) c.x = W + 120; });
+  birds.forEach(b => { b.x -= b.sp + speed * 0.1; b.ph += 0.16; if (b.x < -40) { b.x = W + 40 + Math.random() * 120; b.y = 75 + Math.random() * 85; } });
+  butterflies.forEach(f => { f.x -= speed * 0.45; f.ph += 0.14; if (f.x < -30) { f.x = W + 30 + Math.random() * 140; f.y = 365 + Math.random() * 38; } });
+  if (state !== 'play') { dog.runT += 0.085; return; }
+  tick++;
+
+  const newLevel = 1 + Math.floor((score + Math.floor(tick / 200)) / 25);
+  if (newLevel > level) {
+    level = newLevel;
+    banner = { text: 'УРОВЕНЬ ' + level + '!', life: 95 };
+    Sound.levelUp();
+    haptic('medium');
+  }
+  speed = Math.min(MAX_SPEED, BASE_SPEED + (level - 1) * 0.85 + tick / 2200);
+  if (banner.life > 0) banner.life--;
+
+  if (!dog.onGround) {
+    dog.vy -= GRAV; dog.h += dog.vy;
+    if (dog.h <= 0) {
+      dog.h = 0; dog.vy = 0; dog.onGround = true; dog.squash = 0.28; dog.landT = 7;
+      dog.airJumps = upg.djump > 0 ? 1 : 0;
+      Sound.land();
+      for (let i = 0; i < 7; i++) dust(DOG_X - 10, FLOOR, 1);
+      if (dog.buffer > 0) doJump();
+    }
+  }
+  if (dog.landT > 0) dog.landT--;
+  if (dog.buffer > 0) dog.buffer--;
+  dog.squash *= 0.82;
+  dog.runT += 0.12 + speed * 0.013;
+  if (dog.onGround && tick % 5 === 0) dust(DOG_X - 42, FLOOR, 0.6);
+
+  if (rainbow > 0) {
+    rainbow--;
+    if (rainbow === 0) Sound.setFast(false);
+    trail.forEach(p => { p.x -= speed; });
+    trail.unshift({ x: DOG_X - 24, y: FLOOR - 34 - dog.h });
+    if (trail.length > 26) trail.pop();
+    if (tick % 3 === 0) {
+      const cols = ['255,80,80', '255,200,50', '80,220,100', '70,160,255', '180,90,255'];
+      parts.push({ x: DOG_X - 35 - Math.random() * 40, y: FLOOR - 46 - dog.h + (Math.random() - 0.5) * 24,
+        vx: -speed * 0.6, vy: (Math.random() - 0.5) * 0.9, life: 20, max: 20, r: 2.8, col: cols[tick % cols.length] });
+    }
+  } else if (trail.length > 0) {
+    trail.forEach(p => { p.x -= speed; });
+    trail.pop();
+  }
+
+  if (--spawnIn <= 0) {
+    spawnItems();
+    spawnIn = Math.max(26, Math.floor((360 + Math.random() * 200) / speed));
+  }
+  if (--catIn <= 0) {
+    const last = items[items.length - 1];
+    if (!last || last.x < W - 90) {
+      spawnCat();
+      const minGap = Math.max(105, 220 - level * 14);
+      catIn = minGap + Math.random() * Math.max(90, 210 - level * 12);
+      spawnIn = Math.max(spawnIn, 48);
+    } else catIn = 18;
+  }
+  if ((level >= 2 || upg.djump > 0) && --crowIn <= 0) {
+    spawnCrow();
+    crowIn = Math.max(140, 290 - level * 18) + Math.random() * 140;
+  }
+
+  const dx = DOG_X, dy = FLOOR - 36 - dog.h;
+  const box = { x: dx - 44, y: dy - 30, w: 92, h: 62 };
+
+  const magRange = upg.magnet > 0 ? 68 + upg.magnet * 28 : 0;
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i]; it.x -= speed;
+    if (magRange > 0 && it.type !== 'poop') {
+      const mx = dx - it.x, my = dy - it.cy, dist = Math.hypot(mx, my);
+      if (dist < magRange && dist > 1) {
+        const pull = (4 + upg.magnet * 1.8);
+        it.x += (mx / dist) * pull;
+        it.cy += (my / dist) * pull;
+      }
+    }
+    if (it.type === 'poop' && tick % 10 === 0 && it.x > 0 && it.x < W) stinkWave(it.x, it.cy);
+    const hw = it.w * 0.4, hh = it.h * 0.42;
+    if (Math.abs(it.x - dx - 4) < hw + box.w / 2 && Math.abs(it.cy - dy) < hh + box.h / 2) {
+      if (it.type === 'poop') {
+        score = Math.max(0, score - 2); Sound.poop(); pop(it.x, it.cy - 20, '-2', '#ff6b6b');
+        sparkle(it.x, it.cy, ['125,80,40', '90,55,25']); haptic('medium'); flash = 6;
+      } else if (it.type === 'cupcake') {
+        score += 10; rainbow = 210 + upg.luck * 35; Sound.setFast(true); Sound.cupcake();
+        pop(it.x, it.cy - 20, '+10 🌈', '#ffd24a');
+        sparkle(it.x, it.cy, ['255,90,90', '255,210,60', '90,200,90', '80,150,255'], 18); haptic('heavy');
+      } else if (it.type === 'bone') {
+        score += 5; Sound.bone(); pop(it.x, it.cy - 20, '+5 🦴', '#ffe066');
+        sparkle(it.x, it.cy, ['255,215,70', '255,245,160'], 16); haptic('medium');
+      } else if (it.type === 'shield') {
+        shieldHits = Math.min(Math.max(1, upg.shield), shieldHits + 1); Sound.shield(); pop(it.x, it.cy - 20, 'ЩИТ!', '#70e0ff');
+        sparkle(it.x, it.cy, ['90,220,255', '255,230,110'], 16); haptic('medium');
       } else {
-        if (rand < 0.45) items.push({ ...objParams, type: 'food' });
-        else if (rand < 0.9) items.push({ ...objParams, type: 'water' });
-        else items.push({ ...objParams, type: 'cupcake', size: 30 });
+        score += 1; Sound.collect(); pop(it.x, it.cy - 20, '+1', '#ffffff');
+        sparkle(it.x, it.cy, it.type === 'water' ? ['150,210,255', '255,255,255'] : ['255,200,90', '210,150,60']); haptic('light');
       }
+      items.splice(i, 1); continue;
     }
-
-    if (frame % 230 === 0 && Math.random() < 0.6) {
-      cats.push({ x: 440, y: GROUND_Y + 18, width: 36, height: 36, speed: 4 });
-    }
+    if (it.x < -80) items.splice(i, 1);
   }
 
-  function update() {
-    if (gameOver) return;
-    frame++;
-
-    // Сдвиг земли для эффекта бега
-    groundX = (groundX - GROUND_SPEED) % canvas.width;
-
-    dog.vy += dog.gravity;
-    dog.y += dog.vy;
-
-    if (dog.y >= GROUND_Y) {
-      dog.y = GROUND_Y;
-      dog.vy = 0;
-      dog.isGrounded = true;
+  for (let i = cats.length - 1; i >= 0; i--) {
+    const c = cats[i];
+    if (c.knocked) {
+      c.x += 9; c.yOff += c.vy; c.vy += 0.9; c.rot += 0.22;
+      if (c.x > W + 120 || c.yOff > 150) cats.splice(i, 1);
+      continue;
     }
-
-    if (rainbowTimer > 0) rainbowTimer--;
-
-    // Коллизии предметов
-    for (let i = items.length - 1; i >= 0; i--) {
-      let item = items[i];
-      item.x -= GROUND_SPEED;
-      if (Math.abs(dog.x - item.x) < 25 && Math.abs(dog.y - item.y) < 25) {
-        if (item.type === 'food' || item.type === 'water') score += 1;
-        else if (item.type === 'poop') score = Math.max(0, score - 2);
-        else if (item.type === 'cupcake') { score += 10; rainbowTimer = 120; }
-        items.splice(i, 1); continue;
+    c.x -= speed + c.extraSpeed; c.t += c.fast ? 0.27 : 0.2;
+    const cx = c.x, cy = FLOOR - 28;
+    if (Math.abs(cx - dx) < c.w * 0.31 + box.w / 2 - 8 && Math.abs(cy - dy) < 26 + box.h / 2 - 6) {
+      if (shieldHits > 0) {
+        shieldHits = 0; c.knocked = true; c.yOff = 0; c.vy = -12; c.rot = 0;
+        score += 3; shake = 8; flash = 5; Sound.shieldBreak(); haptic('medium');
+        pop(cx, cy - 30, '+3 ЩИТ!', '#70e0ff');
+        sparkle(cx, cy, ['90,220,255', '255,255,255'], 20);
+        continue;
       }
-      if (item.x < -30) items.splice(i, 1);
+      endRun();
+      break;
     }
-
-    // Движение и коллизии котов
-    for (let i = cats.length - 1; i >= 0; i--) {
-      let cat = cats[i];
-      cat.x -= cat.speed;
-      if (Math.abs(dog.x - cat.x) < 22 && Math.abs(dog.y - cat.y) < 22) { gameOver = true; }
-      if (cat.x < -40) cats.splice(i, 1);
-    }
-    spawnEntities();
+    if (c.x < -150) cats.splice(i, 1);
   }
 
-  function drawShanti() {
-    let frameX = 0;
-    let frameY = 0;
-
-    if (!dog.isGrounded) {
-      frameY = 2; // Прыжок (строка 2)
-      frameX = dog.vy < 0 ? 0 : 1; 
-    } else {
-      let runIndex = Math.floor(frame / 5) % 8; // 8 кадров бега
-      frameX = runIndex % 4;                    
-      frameY = Math.floor(runIndex / 4);         
+  for (let i = crows.length - 1; i >= 0; i--) {
+    const cr = crows[i];
+    if (cr.knocked) {
+      cr.x += 8; cr.y += cr.vy; cr.vy += 0.7; cr.rot += 0.24;
+      if (cr.x > W + 120 || cr.y > H + 80) crows.splice(i, 1);
+      continue;
     }
-
-    const rawFrameW = sprites.shanti.width / 4;
-    const rawFrameH = sprites.shanti.height / 4;
-
-    // Защитный отступ в 2 пикселя, чтобы не захватывать соседние строки
-    const pad = 2; 
-
-    ctx.drawImage(
-      sprites.shanti,
-      frameX * rawFrameW + pad,            // Сдвигаем точку старта вырезки X
-      frameY * rawFrameH + pad,            // Сдвигаем точку старта вырезки Y
-      rawFrameW - (pad * 2),               // Уменьшаем ширину вырезки на отступы
-      rawFrameH - (pad * 2),               // Уменьшаем высоту вырезки на отступы
-      dog.x, dog.y,
-      dog.width, dog.height
-    );
-  }
-
-  function drawCat(cat) {
-    if (!sprites.cat.complete || sprites.cat.naturalWidth === 0) return;
-
-    const cols = 4;
-    const rows = 5;
-
-    const catFrameW = sprites.cat.naturalWidth / cols;
-    const catFrameH = sprites.cat.naturalHeight / rows;
-
-    let catFrameX = Math.floor(frame / 6) % cols; 
-    let catFrameY = 0; 
-
-    ctx.drawImage(
-      sprites.cat,
-      catFrameX * catFrameW, catFrameY * catFrameH,
-      catFrameW, catFrameH,
-      cat.x, cat.y,
-      cat.width, cat.height
-    );
-  }
-
-  // Отрисовка зацикленного бега земли
-  function drawGround() {
-    if (sprites.ground.complete && sprites.ground.naturalWidth !== 0) {
-      // Рисуем две копии подряд, чтобы перекрыть весь экран при прокрутке
-      ctx.drawImage(sprites.ground, groundX, 205, canvas.width, 45);
-      ctx.drawImage(sprites.ground, groundX + canvas.width, 205, canvas.width, 45);
-    } else {
-      ctx.fillStyle = '#4CAF50';
-      ctx.fillRect(0, 205, canvas.width, 45);
-    }
-  }
-
-  function draw() {
-    // 1. Отрисовка статичного фона (небо)
-    if (sprites.bg.complete && sprites.bg.naturalWidth !== 0) {
-      ctx.drawImage(sprites.bg, 0, 0, canvas.width, canvas.height);
-    } else {
-      ctx.fillStyle = '#87CEEB';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-    }
-
-    ctx.imageSmoothingEnabled = false;
-
-    // 2. Движущаяся земля
-    drawGround();
-
-    // Радуга за Шанти
-    if (rainbowTimer > 0) {
-      const colors = ['#FF0000', '#FF7F00', '#FFFF00', '#00FF00', '#0000FF', '#4B0082'];
-      colors.forEach((c, idx) => { ctx.fillStyle = c; ctx.fillRect(dog.x - 35, dog.y + 20 + (idx * 2), 35, 2); });
-    }
-
-    // Отрисовка Шанти
-    if (sprites.shanti.complete && sprites.shanti.naturalWidth !== 0) {
-      drawShanti();
-    } else {
-      ctx.font = '30px serif'; ctx.fillText('🐶', dog.x, dog.y + 30);
-    }
-
-    // Отрисовка бонусов
-    items.forEach(item => {
-      const img = sprites[item.type];
-      if (img && img.complete && img.naturalWidth !== 0) {
-        ctx.drawImage(img, item.x, item.y, item.size, item.size);
-      } else {
-        let icon = '🥣';
-        if (item.type === 'water') icon = '💧';
-        if (item.type === 'poop') icon = '💩';
-        if (item.type === 'cupcake') icon = '🧁';
-        ctx.font = '24px serif'; ctx.fillText(icon, item.x, item.y + 20);
+    cr.x -= speed + cr.extraSpeed;
+    cr.t += 0.22;
+    cr.y = cr.baseY + Math.sin(cr.t * 0.55) * 9;
+    if (Math.abs(cr.x - dx) < 34 + box.w / 2 - 12 && Math.abs(cr.y - dy) < 22 + box.h / 2 - 10) {
+      if (shieldHits > 0) {
+        shieldHits = 0; cr.knocked = true; cr.vy = -10; cr.rot = 0;
+        score += 4; shake = 8; flash = 5; Sound.shieldBreak(); haptic('medium');
+        pop(cr.x, cr.y - 25, '+4 ЩИТ!', '#70e0ff');
+        sparkle(cr.x, cr.y, ['70,80,100', '110,220,255'], 18);
+        continue;
       }
+      endRun();
+      break;
+    }
+    if (cr.x < -120) crows.splice(i, 1);
+  }
+
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i]; p.x += p.vx; p.y += p.vy; p.vy += p.g || 0; if (--p.life <= 0) parts.splice(i, 1);
+  }
+  for (let i = pops.length - 1; i >= 0; i--) { const p = pops[i]; p.y -= 1.05; if (--p.life <= 0) pops.splice(i, 1); }
+}
+
+function endRun() {
+  state = 'over'; overAt = performance.now(); shake = 14; flash = 10;
+  dog.h = 0; dog.vy = 0; dog.onGround = true; dog.landT = 0;
+  banner.life = 0; cats = []; crows = []; trail = [];
+  Sound.hit(); Sound.setFast(false); Sound.musicStop(); haptic('heavy');
+  if (score > best) { best = score; localStorage.setItem('shanti_best', best); }
+  lastRank = saveScore(score, level);
+  earnedCoins = Math.round((score + (level - 1) * 3) * (1 + upg.coin * 0.25));
+  if (earnedCoins > 0) { coins += earnedCoins; localStorage.setItem('shanti_coins', coins); }
+}
+function drawBg() {
+  // 1. Бесшовная движущаяся панорама пейзажа
+  if (img.bg.naturalWidth) {
+    const x0 = -Math.floor(bgX);
+    ctx.drawImage(img.bg, x0, 0, W, H);
+    ctx.drawImage(img.bg, x0 + W, 0, W, H);
+  } else {
+    ctx.fillStyle = '#87CEEB'; ctx.fillRect(0, 0, W, H);
+  }
+
+  // Лёгкая смена атмосферы с уровнем (закатный тёплый оттенок на высоких уровнях)
+  if (level >= 3) {
+    ctx.save();
+    ctx.fillStyle = level % 2 === 1 ? 'rgba(255, 130, 70, 0.13)' : 'rgba(130, 80, 210, 0.12)';
+    ctx.fillRect(0, 0, W, GROUND_TOP + 20);
+    ctx.restore();
+  }
+
+  // 2. Анимированное солнце и вращающиеся лучи
+  const tNow = performance.now() * 0.001;
+  ctx.save();
+  ctx.translate(650, 84);
+  ctx.rotate(tNow * 0.12);
+  const rayG = ctx.createLinearGradient(0, 0, 0, 270);
+  rayG.addColorStop(0, 'rgba(255, 248, 200, 0.14)');
+  rayG.addColorStop(0.65, 'rgba(255, 248, 200, 0.05)');
+  rayG.addColorStop(1, 'rgba(255, 248, 200, 0)');
+  ctx.fillStyle = rayG;
+  for (let i = 0; i < 8; i++) {
+    ctx.rotate(Math.PI / 4);
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-22, 270); ctx.lineTo(22, 270); ctx.closePath(); ctx.fill();
+  }
+  const sunG = ctx.createRadialGradient(0, 0, 6, 0, 0, 48);
+  sunG.addColorStop(0, 'rgba(255, 250, 210, 0.9)');
+  sunG.addColorStop(0.45, 'rgba(255, 230, 140, 0.35)');
+  sunG.addColorStop(1, 'rgba(255, 230, 140, 0)');
+  ctx.fillStyle = sunG;
+  ctx.beginPath(); ctx.arc(0, 0, 48, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+
+  // 3. Плывущие полупрозрачные облака
+  ctx.save();
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+  for (const c of clouds) {
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, 18 * c.s, 0, Math.PI * 2);
+    ctx.arc(c.x + 18 * c.s, c.y - 7 * c.s, 22 * c.s, 0, Math.PI * 2);
+    ctx.arc(c.x + 38 * c.s, c.y, 16 * c.s, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+
+  // 4. Взмахивающие крыльями птички вдалеке
+  ctx.save();
+  ctx.strokeStyle = 'rgba(45, 55, 90, 0.65)';
+  ctx.lineWidth = 2;
+  ctx.lineCap = 'round';
+  for (const b of birds) {
+    const flap = Math.sin(b.ph) * 5;
+    ctx.beginPath();
+    ctx.moveTo(b.x - 7, b.y + flap);
+    ctx.quadraticCurveTo(b.x - 3, b.y - 4, b.x, b.y);
+    ctx.quadraticCurveTo(b.x + 3, b.y - 4, b.x + 7, b.y + flap);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawGround() {
+  // Мягкая тень перехода между лугом фона и передней дорожкой
+  const seamG = ctx.createLinearGradient(0, GROUND_TOP - 14, 0, GROUND_TOP + 18);
+  seamG.addColorStop(0, 'rgba(65, 105, 45, 0)');
+  seamG.addColorStop(1, 'rgba(65, 105, 45, 0.35)');
+  ctx.fillStyle = seamG;
+  ctx.fillRect(0, GROUND_TOP - 14, W, 32);
+
+  const g = img.ground;
+  if (!g.naturalWidth) { ctx.fillStyle = '#4c9a3c'; ctx.fillRect(0, GROUND_TOP, W, H - GROUND_TOP); return; }
+  const th = H - GROUND_TOP + 6, tw = W;
+  const x0 = -Math.floor(groundX);
+  ctx.drawImage(g, x0, GROUND_TOP - 6, tw, th);
+  ctx.drawImage(g, x0 + tw, GROUND_TOP - 6, tw, th);
+
+  // Живые бабочки/светлячки над травой
+  ctx.save();
+  for (const f of butterflies) {
+    const fy = f.y + Math.sin(f.ph * 1.3) * 8;
+    const wing = Math.abs(Math.sin(f.ph * 2.5)) * 4 + 1.5;
+    ctx.fillStyle = f.col;
+    ctx.beginPath();
+    ctx.ellipse(f.x - 2, fy, wing, 3, -0.3, 0, Math.PI * 2);
+    ctx.ellipse(f.x + 2, fy, wing, 3, 0.3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawRainbow() {
+  if (trail.length < 2) return;
+  const cols = ['#ff3b3b', '#ff9a2e', '#ffe135', '#4cd964', '#3aa0ff', '#9c5cff'];
+  const head = trail[0], tail = trail[trail.length - 1];
+  const fade = rainbow > 0 ? Math.min(1, rainbow / 30) : trail.length / 26;
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  for (let c = 0; c < cols.length; c++) {
+    const grad = ctx.createLinearGradient(head.x, head.y, tail.x, tail.y);
+    grad.addColorStop(0, 'rgba(255,255,255,0)');
+    grad.addColorStop(0.18, cols[c]);
+    grad.addColorStop(0.65, cols[c]);
+    grad.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.globalAlpha = 0.72 * fade;
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = 5.5;
+    ctx.beginPath();
+    for (let i = 0; i < trail.length; i++) {
+      const p = trail[i];
+      const spread = 0.35 + 0.65 * Math.min(1, i / 5);
+      const offY = (c - 2.5) * 4.4 * spread;
+      const wave = Math.sin(tick * 0.22 - i * 0.45) * (i * 0.32);
+      const px = p.x, py = p.y + offY + wave;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawDog() {
+  // На старте и после Game Over Шанти сидит и мило вылизывает лапу
+  if ((state === 'ready' || state === 'over') && img.dogIdle && img.dogIdle.naturalWidth) {
+    const seq = [0, 1, 2, 1, 2, 3, 0];
+    const f = seq[Math.floor(dog.runT) % seq.length];
+    const sx = f * DOG_IDLE.cw, s = DOG_IDLE.scale;
+    ctx.save(); ctx.globalAlpha = 0.24; ctx.fillStyle = '#000';
+    ctx.beginPath(); ctx.ellipse(DOG_X, FLOOR + 3, 52, 8, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(img.dogIdle, sx, 0, DOG_IDLE.cw, DOG_IDLE.ch, DOG_X - DOG_IDLE.ax * s, FLOOR - DOG_IDLE.feet * s, DOG_IDLE.cw * s, DOG_IDLE.ch * s);
+    ctx.restore();
+    return;
+  }
+  if (!img.dog.naturalWidth) return;
+  let f;
+  if (!dog.onGround) f = dog.vy > 0 ? DOG.jump[0] : DOG.jump[1];
+  else if (dog.landT > 0) f = DOG.land;
+  else f = Math.floor(dog.runT) % DOG.run;
+  const sx = (f % DOG.cols) * DOG.cw, sy = Math.floor(f / DOG.cols) * DOG.ch;
+  const s = DOG_SCALE;
+  const sq = dog.onGround ? dog.squash : 0;
+
+  ctx.save(); ctx.globalAlpha = 0.26 * Math.max(0.35, 1 - dog.h / 260); ctx.fillStyle = '#000';
+  ctx.beginPath(); ctx.ellipse(DOG_X, FLOOR + 3, 62 * Math.max(0.5, 1 - dog.h / 400), 8, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+
+  ctx.save();
+  ctx.translate(DOG_X, FLOOR - dog.h);
+  ctx.scale(1 + sq * 0.5, 1 - sq * 0.5);
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(img.dog, sx, sy, DOG.cw, DOG.ch, -DOG.ax * s, -DOG.feet * s, DOG.cw * s, DOG.ch * s);
+  ctx.restore();
+
+  if (shieldHits > 0) {
+    ctx.save();
+    const pulse = 1 + Math.sin(tick * 0.15) * 0.04;
+    ctx.strokeStyle = 'rgba(110, 225, 255, 0.85)';
+    ctx.fillStyle = 'rgba(110, 225, 255, 0.16)';
+    ctx.lineWidth = 3.5;
+    ctx.beginPath();
+    ctx.ellipse(DOG_X + 6, FLOOR - 45 - dog.h, 76 * pulse, 56 * pulse, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function drawCat(c) {
+  if (!img.cat.naturalWidth) return;
+  const f = Math.floor(c.t) % CAT.frames, sx = (f % CAT.cols) * CAT.cw, sy = Math.floor(f / CAT.cols) * CAT.ch;
+  const s = c.w / CAT.cw;
+  if (!c.knocked) {
+    ctx.save(); ctx.globalAlpha = 0.25; ctx.fillStyle = '#000';
+    ctx.beginPath(); ctx.ellipse(c.x, FLOOR + 3, 42, 6, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+  }
+  ctx.save();
+  ctx.translate(c.x, FLOOR + (c.yOff || 0));
+  if (c.rot) ctx.rotate(c.rot);
+  if (c.fast && !c.knocked) { ctx.shadowColor = '#ff5e3a'; ctx.shadowBlur = 14; }
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(img.cat, sx, sy, CAT.cw, CAT.ch, -CAT.ax * s, -CAT.feet * s, CAT.cw * s, CAT.ch * s);
+  ctx.restore();
+}
+
+function drawCrow(cr) {
+  if (!img.crow || !img.crow.naturalWidth) return;
+  const f = Math.floor(cr.t) % CROW.frames;
+  const sx = f * CROW.cw, s = cr.w / CROW.cw;
+  ctx.save();
+  ctx.translate(cr.x, cr.y);
+  if (cr.rot) ctx.rotate(cr.rot);
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(img.crow, sx, 0, CROW.cw, CROW.ch, -CROW.ax * s, -CROW.ay * s, CROW.cw * s, CROW.ch * s);
+  ctx.restore();
+}
+
+function drawItems() {
+  const tNow = performance.now() * 0.004;
+  for (const it of items) {
+    const im = img[it.type]; if (!im || !im.naturalWidth) continue;
+    const phase = tNow + it.bob;
+    const isUpper = it.cy < FLOOR - 100;
+    const bob = isUpper ? Math.sin(phase * 1.4) * 6 : Math.sin(phase * 1.8) * 2.5;
+    let rot = Math.sin(phase * 1.2) * 0.07;
+    let sx = 1 + Math.sin(phase * 2.0) * 0.05;
+    let sy = 1 + Math.cos(phase * 2.0) * 0.05;
+    if (it.type === 'poop') {
+      sx = 1 + Math.sin(phase * 3.2) * 0.07;
+      sy = 1 - Math.sin(phase * 3.2) * 0.07;
+      rot = 0;
+    }
+    ctx.save();
+    ctx.translate(it.x, it.cy + bob);
+    ctx.rotate(rot);
+    ctx.scale(sx, sy);
+    if (it.type === 'cupcake') { ctx.shadowColor = '#ffe27a'; ctx.shadowBlur = 18; }
+    else if (it.type === 'bone') { ctx.shadowColor = '#ffd040'; ctx.shadowBlur = 14; }
+    else if (it.type === 'shield') { ctx.shadowColor = '#6be0ff'; ctx.shadowBlur = 16; }
+    ctx.drawImage(im, -it.w / 2, -it.h / 2, it.w, it.h);
+    ctx.restore();
+  }
+}
+
+function drawParts() {
+  for (const p of parts) {
+    ctx.globalAlpha = Math.max(0, p.life / p.max);
+    ctx.fillStyle = 'rgb(' + p.col + ')';
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r * (0.5 + 0.5 * p.life / p.max), 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  ctx.font = 'bold 26px system-ui, sans-serif'; ctx.textAlign = 'center';
+  for (const p of pops) {
+    ctx.globalAlpha = Math.min(1, p.life / 20); ctx.lineWidth = 5; ctx.strokeStyle = 'rgba(0,0,0,.55)'; ctx.strokeText(p.text, p.x, p.y);
+    ctx.fillStyle = p.col; ctx.fillText(p.text, p.x, p.y);
+  }
+  ctx.globalAlpha = 1; ctx.textAlign = 'left';
+}
+
+function text(t, x, y, size, col = '#fff', align = 'center') {
+  ctx.font = 'bold ' + size + 'px system-ui, sans-serif'; ctx.textAlign = align;
+  ctx.lineWidth = Math.max(4, size / 5); ctx.strokeStyle = 'rgba(20,10,40,.75)'; ctx.lineJoin = 'round';
+  ctx.strokeText(t, x, y); ctx.fillStyle = col; ctx.fillText(t, x, y);
+}
+
+function drawHud() {
+  if (!(state !== 'play' && (showShop || showBoard))) {
+    text('Очки: ' + score, 20, 42, 28, '#fff', 'left');
+    text('Ур. ' + level + '  •  Рекорд: ' + best + '  •  🪙 ' + coins, 20, 70, 17, '#ffe9a8', 'left');
+    if (shieldHits > 0) text('🛡️ Щит ×' + shieldHits, 20, 96, 16, '#7ce8ff', 'left');
+  }
+
+  ctx.save(); ctx.fillStyle = 'rgba(20,10,40,.55)'; ctx.beginPath(); ctx.arc(W - 38, 34, 22, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+  text(Sound.muted ? '🔇' : '🔊', W - 38, 42, 22);
+
+  if (state !== 'play') {
+    ctx.save(); ctx.fillStyle = showBoard ? 'rgba(255,210,70,.85)' : 'rgba(20,10,40,.55)';
+    ctx.beginPath(); ctx.arc(W - 92, 34, 22, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+    text('🏆', W - 92, 42, 22);
+
+    ctx.save(); ctx.fillStyle = showShop ? 'rgba(110,220,255,.85)' : 'rgba(255,255,255,0.22)';
+    ctx.beginPath(); ctx.arc(W - 146, 34, 22, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+    text('🛒', W - 146, 42, 22);
+  }
+
+  if (banner.life > 0) {
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, banner.life / 20);
+    text(banner.text, W / 2, 130 - (95 - banner.life) * 0.25, 42, '#ffd24a');
+    ctx.restore();
+  }
+}
+
+function drawShopModal() {
+  ctx.fillStyle = 'rgba(15, 10, 32, 0.88)'; ctx.fillRect(0, 0, W, H);
+  text('🛒 Магазин улучшений', 75, 56, 30, '#ffd24a', 'left');
+  text('Баланс: 🪙 ' + coins, W - 75, 56, 24, '#ffe9a8', 'right');
+
+  SHOP_ITEMS.forEach((item, idx) => {
+    const ry = 98 + idx * 58;
+    const lvl = upg[item.key], max = item.costs.length, isMax = lvl >= max;
+    const price = isMax ? 0 : item.costs[lvl];
+    const canBuy = !isMax && coins >= price;
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(255,255,255,0.09)';
+    ctx.beginPath(); ctx.roundRect(65, ry, W - 130, 50, 10); ctx.fill();
+    ctx.restore();
+
+    text(item.icon + ' ' + item.name, 82, ry + 23, 18, '#fff', 'left');
+    text(item.desc, 82, ry + 42, 13, '#cbd5e1', 'left');
+
+    // Полоска уровня
+    for (let k = 0; k < max; k++) {
+      ctx.fillStyle = k < lvl ? '#4cd964' : 'rgba(255,255,255,0.18)';
+      ctx.fillRect(430 + k * 24, ry + 18, 18, 12);
+    }
+
+    // Кнопка покупки
+    ctx.save();
+    ctx.fillStyle = isMax ? 'rgba(76,217,100,0.35)' : (canBuy ? '#ffd24a' : 'rgba(255,255,255,0.16)');
+    ctx.beginPath(); ctx.roundRect(578, ry + 6, 148, 38, 8); ctx.fill();
+    ctx.restore();
+    text(isMax ? 'МАКС' : '🪙 ' + price, 652, ry + 31, 17, isMax ? '#9fffa8' : (canBuy ? '#241500' : '#999'));
+  });
+
+  // Кнопка "Играть"
+  ctx.save();
+  ctx.fillStyle = '#4cd964';
+  ctx.beginPath(); ctx.roundRect(W / 2 - 110, 418, 220, 44, 12); ctx.fill();
+  ctx.restore();
+  text('▶  В забег!', W / 2, 448, 22, '#0b2610');
+}
+
+function drawLeaderboardModal() {
+  ctx.fillStyle = 'rgba(15, 10, 32, 0.82)'; ctx.fillRect(0, 0, W, H);
+  text('🏆 Таблица лидеров', W / 2, 85, 38, '#ffd24a');
+  if (board.length === 0) {
+    text('Пока нет рекордов — сыграй первый забег!', W / 2, 220, 22, '#ddd');
+  } else {
+    board.forEach((row, idx) => {
+      const y = 148 + idx * 42;
+      const isMe = idx === lastRank;
+      const col = isMe ? '#70e0ff' : (idx === 0 ? '#ffd24a' : '#fff');
+      text(`${idx + 1}. ${row.name}`, W / 2 - 170, y, 22, col, 'left');
+      text(`Ур.${row.level}  •  ${row.score} очк.`, W / 2 + 170, y, 22, col, 'right');
     });
+  }
+  ctx.save();
+  ctx.fillStyle = 'rgba(255,255,255,0.16)';
+  ctx.beginPath(); ctx.roundRect(W / 2 - 90, 378, 180, 38, 10); ctx.fill();
+  ctx.restore();
+  text('✏️ Имя: ' + playerName, W / 2, 404, 18, '#ffe9a8');
+  text('Нажми в любом месте, чтобы закрыть', W / 2, 455, 17, '#bbb');
+}
 
-    // Отрисовка кота
-    cats.forEach(cat => {
-      if (sprites.cat.complete && sprites.cat.naturalWidth !== 0) {
-        drawCat(cat);
-      } else {
-        ctx.font = '28px serif'; ctx.fillText('🐈', cat.x, cat.y + 25);
-      }
-    });
+function draw() {
+  ctx.save();
+  if (shake > 0) { ctx.translate((Math.random() - .5) * shake, (Math.random() - .5) * shake); shake *= 0.85; if (shake < 0.5) shake = 0; }
+  ctx.imageSmoothingEnabled = false;
+  drawBg(); drawGround(); drawRainbow(); drawItems();
+  cats.forEach(drawCat); crows.forEach(drawCrow); drawDog(); drawParts(); drawHud();
+  if (flash > 0) { ctx.fillStyle = 'rgba(255,255,255,' + (flash / 14) + ')'; ctx.fillRect(0, 0, W, H); flash--; }
 
-    // Счет
-    ctx.fillStyle = '#000'; ctx.font = 'bold 16px sans-serif'; ctx.fillText(`Очки: ${score}`, 15, 30);
-    
-    // Экран окончания игры
-    if (gameOver) {
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.7)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = '#FFF'; ctx.textAlign = 'center';
-      ctx.font = 'bold 24px sans-serif'; ctx.fillText('Игра окончена!', canvas.width / 2, 110);
-      ctx.font = '16px sans-serif'; ctx.fillText(`Итоговый счет: ${score}`, canvas.width / 2, 140);
-      ctx.fillText('Нажмите для рестарта', canvas.width / 2, 170); ctx.textAlign = 'left';
+  if (showShop && state !== 'play') {
+    drawShopModal();
+  } else if (showBoard && state !== 'play') {
+    drawLeaderboardModal();
+  } else if (state === 'ready') {
+    ctx.fillStyle = 'rgba(20,10,40,.42)'; ctx.fillRect(0, 0, W, H);
+    text('Shanti Runner', W / 2, 165, 62, '#fff');
+    text('Собирай еду, косточки и щиты • Прыгай через котов!', W / 2, 215, 22, '#ffe9a8');
+    text('Нажми, чтобы начать', W / 2, 295, 30, '#fff');
+    ctx.save();
+    ctx.fillStyle = 'rgba(255, 210, 70, 0.9)';
+    ctx.beginPath(); ctx.roundRect(W / 2 - 105, 355, 210, 44, 12); ctx.fill();
+    ctx.restore();
+    text('🛒 Магазин  (🪙 ' + coins + ')', W / 2, 384, 20, '#241500');
+  } else if (state === 'over') {
+    ctx.fillStyle = 'rgba(20,10,40,.65)'; ctx.fillRect(0, 0, W, H);
+    text('Игра окончена!', W / 2, 96, 46, '#fff');
+    text('Счёт: ' + score + '  •  Ур. ' + level + (score >= best && score > 0 ? '  🔥 Рекорд!' : ''), W / 2, 142, 23, '#ffe9a8');
+    text('Заработано: +' + earnedCoins + ' 🪙   (Кошелёк: ' + coins + ' 🪙)', W / 2, 178, 20, '#70e0ff');
+    if (board.length > 0) {
+      text('🏆 Лучшие забеги:', W / 2, 224, 19, '#ffd24a');
+      board.slice(0, 3).forEach((r, idx) => {
+        const col = idx === lastRank ? '#70e0ff' : '#fff';
+        text(`${idx + 1}. ${r.name} — ${r.score} очк. (ур. ${r.level})`, W / 2, 256 + idx * 28, 18, col);
+      });
     }
+    ctx.save();
+    ctx.fillStyle = '#ffd24a';
+    ctx.beginPath(); ctx.roundRect(265, 376, 190, 48, 12); ctx.fill();
+    ctx.fillStyle = '#4cd964';
+    ctx.beginPath(); ctx.roundRect(475, 376, 200, 48, 12); ctx.fill();
+    ctx.restore();
+    text('🛒 Магазин', 360, 408, 21, '#241500');
+    text('▶ Играть снова', 575, 408, 21, '#0b2610');
   }
+  ctx.restore();
+}
 
-  function restart() {
-    score = 0; gameOver = false; items = []; cats = []; dog.y = GROUND_Y; dog.vy = 0; dog.isGrounded = true; frame = 0; groundX = 0;
-  }
-
-  function loop() { update(); draw(); requestAnimationFrame(loop); }
-
-  window.onload = loop;
+let last = 0, acc = 0;
+function loop(t) {
+  if (!last) last = t; acc += Math.min(100, t - last); last = t;
+  while (acc >= 1000 / 60) { update(); acc -= 1000 / 60; }
+  draw(); requestAnimationFrame(loop);
+}
+loaded.then(() => requestAnimationFrame(loop));
 </script>
 </body>
 </html>
