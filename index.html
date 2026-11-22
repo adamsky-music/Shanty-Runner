@@ -10,7 +10,9 @@
   html, body { height: 100%; background: #14121c; overflow: hidden; }
   body { display: flex; align-items: center; justify-content: center; font-family: system-ui, -apple-system, sans-serif; }
   #gameCanvas {
-    width: 100%; max-width: 960px; max-height: 100vh; aspect-ratio: 8 / 5;
+    width: min(100vw, 160vh, 960px);
+    height: min(62.5vw, 100vh, 600px);
+    display: block;
     image-rendering: pixelated; touch-action: manipulation; background: #87CEEB;
     border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.45);
   }
@@ -103,7 +105,7 @@ let lastRank = -1, showBoard = false, showShop = false, earnedCoins = 0;
 // ───────────────────────── Многоинструментальная музыка и звук ─────────────────────────
 const Sound = (() => {
   let ac = null, master = null, musicBus = null, muted = localStorage.getItem('shanti_muted') === '1';
-  let musicOn = false, nextT = 0, step = 0, timer = null, fastMode = false;
+  let musicOn = false, nextT = 0, step = 0, timer = null, mode = 'play'; // play | fast | chill
 
   const init = () => {
     if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
@@ -164,13 +166,40 @@ const Sound = (() => {
     48,0,60,0, 45,0,57,0, 38,0,50,0, 43,0,55,0
   ];
 
+  const CHILL_MEL = [
+    76,0,0,79, 0,0,72,0, 74,0,0,76, 0,0,0,0,
+    77,0,0,81, 0,0,79,0, 74,0,0,76, 0,0,0,0,
+    72,0,0,76, 0,0,79,0, 81,0,0,77, 0,0,0,0,
+    76,0,0,74, 0,0,72,0, 74,0,0,0, 0,0,0,0
+  ];
+  const CHILL_CHORD = [
+    [48,60,64,67,71], [45,57,60,64,67], [41,53,57,60,64], [43,55,59,62,64]
+  ];
+
   const sched = () => {
     if (!ac || !musicOn) return;
-    const tempo = fastMode ? 0.112 : 0.138;
+    if (mode === 'chill') {
+      const tempo = 0.25;
+      while (nextT < ac.currentTime + 0.35) {
+        const i = step % 64;
+        if (i % 16 === 0) {
+          const ch = CHILL_CHORD[(i / 16) % 4];
+          envTone(midi(ch[0]), nextT, tempo * 14, 'sine', 0.065, musicBus);
+          ch.slice(1).forEach((n, idx) => envTone(midi(n), nextT + idx * 0.055, tempo * 9, 'triangle', 0.028, musicBus, null, 850));
+        }
+        const cm = CHILL_MEL[i];
+        if (cm) envTone(midi(cm), nextT, tempo * 3.2, 'sine', 0.055, musicBus);
+        nextT += tempo;
+        step++;
+      }
+      return;
+    }
+    const fast = mode === 'fast';
+    const tempo = fast ? 0.112 : 0.138;
     while (nextT < ac.currentTime + 0.28) {
       const i = step % 64;
       const lm = LEAD[i];
-      if (lm) envTone(midi(lm + (fastMode ? 12 : 0)), nextT, tempo * 1.75, 'square', 0.052, musicBus, null, 2400);
+      if (lm) envTone(midi(lm + (fast ? 12 : 0)), nextT, tempo * 1.75, 'square', 0.052, musicBus, null, 2400);
       const am = ARP[i];
       if (am) envTone(midi(am), nextT, tempo * 0.95, 'triangle', 0.048, musicBus);
       const bm = BASS[i];
@@ -186,9 +215,10 @@ const Sound = (() => {
   return {
     init,
     get muted() { return muted; },
-    setFast(v) { fastMode = v; },
+    setFast(v) { if (mode !== 'chill') mode = v ? 'fast' : 'play'; },
+    setMode(m) { mode = m; if (ac && musicOn) { nextT = ac.currentTime + 0.05; } },
     toggle() { muted = !muted; localStorage.setItem('shanti_muted', muted ? '1' : '0'); if (master) master.gain.value = muted ? 0 : 0.55; },
-    musicStart() { init(); if (!ac || musicOn) return; musicOn = true; nextT = ac.currentTime + 0.05; step = 0; timer = setInterval(sched, 60); },
+    musicStart(m = 'play') { mode = m; init(); if (!ac) return; if (musicOn) return; musicOn = true; nextT = ac.currentTime + 0.05; step = 0; timer = setInterval(sched, 60); },
     musicStop() { musicOn = false; clearInterval(timer); },
     jump() { init(); if (ac) envTone(310, ac.currentTime, 0.17, 'square', 0.11, master, 720, 2200); },
     land() { if (ac) noiseHit(ac.currentTime, 0.055, 0.06, 400); },
@@ -267,7 +297,7 @@ function reset() {
   banner = { text: '', life: 0 }; lastRank = -1; earnedCoins = 0; showShop = false; showBoard = false;
   dog.h = 0; dog.vy = 0; dog.onGround = true; dog.squash = 0; dog.landT = 0;
   dog.airJumps = upg.djump > 0 ? 1 : 0;
-  Sound.setFast(false);
+  Sound.setMode('play');
 }
 
 // ───────────────────────── Ввод ─────────────────────────
@@ -282,9 +312,9 @@ function editName() {
 function press(x, y) {
   Sound.init();
   if (x !== undefined) {
-    if (x > W - 66 && y < 62) { Sound.toggle(); if (!Sound.muted && state === 'play') Sound.musicStart(); return; }
-    if (state !== 'play' && x > W - 124 && x <= W - 68 && y < 62) { showBoard = !showBoard; showShop = false; if (showBoard) fetchGlobalBoard(); return; }
-    if (state !== 'play' && x > W - 182 && x <= W - 126 && y < 62) { showShop = !showShop; showBoard = false; return; }
+    if (x > W - 66 && y < 62) { Sound.toggle(); if (!Sound.muted) Sound.musicStart(state === 'play' ? 'play' : 'chill'); return; }
+    if (state !== 'play' && x > W - 124 && x <= W - 68 && y < 62) { showBoard = !showBoard; showShop = false; if (showBoard) fetchGlobalBoard(); Sound.musicStart('chill'); return; }
+    if (state !== 'play' && x > W - 182 && x <= W - 126 && y < 62) { showShop = !showShop; showBoard = false; Sound.musicStart('chill'); return; }
     if (showShop && state !== 'play') {
       // Кнопки покупки по строкам (y = 112 + idx * 58, кнопка x: 580..720)
       for (let i = 0; i < SHOP_ITEMS.length; i++) {
@@ -306,7 +336,7 @@ function press(x, y) {
       state = 'play'; reset(); Sound.musicStart(); return;
     }
     if (state === 'ready') {
-      if (x >= W / 2 - 105 && x <= W / 2 + 105 && y >= 355 && y <= 402) { showShop = true; return; }
+      if (x >= W / 2 - 105 && x <= W / 2 + 105 && y >= 355 && y <= 402) { showShop = true; Sound.musicStart('chill'); return; }
     }
   }
   if ((showBoard || showShop) && state !== 'play') { showBoard = false; showShop = false; return; }
@@ -655,7 +685,7 @@ function endRun() {
   state = 'over'; overAt = performance.now(); shake = 14; flash = 10;
   dog.h = 0; dog.vy = 0; dog.onGround = true; dog.landT = 0;
   banner.life = 0; cats = []; crows = []; gaps = []; logs = []; trail = [];
-  Sound.hit(); Sound.setFast(false); Sound.musicStop(); haptic('heavy');
+  Sound.hit(); Sound.setMode('chill'); Sound.musicStart('chill'); haptic('heavy');
   if (score > best) { best = score; localStorage.setItem('shanti_best', best); }
   lastRank = saveScore(score, level);
   earnedCoins = Math.round((score + (level - 1) * 3) * (1 + upg.coin * 0.25));
