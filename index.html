@@ -50,7 +50,7 @@ const ctx = canvas.getContext('2d');
 const FILES = {
   dog: 'assets/shanti_cartoon_sheet.png', dogIdle: 'assets/shanti_idle_sheet.png',
   cat: 'assets/cat_v2_sheet.png', crow: 'assets/crow_sheet.png',
-  bg: 'assets/bg_parallax.jpg', ground: 'assets/ground_v2.png',
+  bg: 'assets/bg_cartoon.jpg', ground: 'assets/ground_cartoon.png',
   food: 'assets/food.png', water: 'assets/water.png', poop: 'assets/poop.png', cupcake: 'assets/cupcake.png',
   bone: 'assets/bone.png', shield: 'assets/shield.png'
 };
@@ -912,19 +912,12 @@ function drawGround() {
     }
     return;
   }
-  // Мягкая тень перехода между лугом фона и передней дорожкой
-  const seamG = ctx.createLinearGradient(0, GROUND_TOP - 14, 0, GROUND_TOP + 18);
-  seamG.addColorStop(0, 'rgba(65, 105, 45, 0)');
-  seamG.addColorStop(1, 'rgba(65, 105, 45, 0.35)');
-  ctx.fillStyle = seamG;
-  ctx.fillRect(0, GROUND_TOP - 14, W, 32);
-
   const g = img.ground;
   if (!g.naturalWidth) { ctx.fillStyle = '#4c9a3c'; ctx.fillRect(0, GROUND_TOP, W, H - GROUND_TOP); return; }
-  const th = H - GROUND_TOP + 6, tw = W;
+  const th = 110, tw = W;
   const x0 = -Math.floor(groundX);
-  ctx.drawImage(g, x0, GROUND_TOP - 6, tw, th);
-  ctx.drawImage(g, x0 + tw, GROUND_TOP - 6, tw, th);
+  ctx.drawImage(g, x0, H - th, tw, th);
+  ctx.drawImage(g, x0 + tw, H - th, tw, th);
 
   // Живые бабочки/светлячки над травой
   ctx.save();
@@ -1268,7 +1261,7 @@ function drawLeaderboardModal() {
 function draw() {
   ctx.save();
   if (shake > 0) { ctx.translate((Math.random() - .5) * shake, (Math.random() - .5) * shake); shake *= 0.85; if (shake < 0.5) shake = 0; }
-  ctx.imageSmoothingEnabled = false;
+  ctx.imageSmoothingEnabled = true;
   drawBg(); drawGround(); drawRainbow(); drawItems();
   cats.forEach(drawCat); crows.forEach(drawCrow); drawDog(); drawParts(); drawHud();
   if (flash > 0) { ctx.fillStyle = 'rgba(255,255,255,' + (flash / 14) + ')'; ctx.fillRect(0, 0, W, H); flash--; }
