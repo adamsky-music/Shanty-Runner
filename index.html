@@ -33,7 +33,7 @@ const GRAV = 1.15, JUMP_V = 19.8;
 const BASE_SPEED = 6.0, MAX_SPEED = 13.5;
 
 // Параметры спрайтшитов (tools/build_v3_assets.py, build_cat_v2.py, build_idle_and_crow.py)
-const DOG = { cw: 278, ch: 273, cols: 4, ax: 155, ay: 144, feet: 217, run: 8, jump: [8, 9], land: 10, sit: 11 };
+const DOG = { cw: 279, ch: 254, cols: 4, ax: 166, ay: 125, feet: 204, run: 8, jump: [8, 9], land: 10 };
 const DOG_IDLE = { cw: 456, ch: 471, cols: 4, frames: 4, ax: 199, feet: 463, scale: 0.28 };
 const CAT = { cw: 469, ch: 224, cols: 4, frames: 8, ax: 198, ay: 102, feet: 205 };
 const CROW = { cw: 411, ch: 339, cols: 4, frames: 4, ax: 95, ay: 170 };
@@ -48,7 +48,7 @@ const ctx = canvas.getContext('2d');
 
 // ───────────────────────── Загрузка ─────────────────────────
 const FILES = {
-  dog: 'assets/shanti_v3_sheet.png', dogIdle: 'assets/shanti_idle_sheet.png',
+  dog: 'assets/shanti_cartoon_sheet.png', dogIdle: 'assets/shanti_idle_sheet.png',
   cat: 'assets/cat_v2_sheet.png', crow: 'assets/crow_sheet.png',
   bg: 'assets/bg_parallax.jpg', ground: 'assets/ground_v2.png',
   food: 'assets/food.png', water: 'assets/water.png', poop: 'assets/poop.png', cupcake: 'assets/cupcake.png',
@@ -232,6 +232,7 @@ const Sound = (() => {
     cupcake() { if (ac) { const t = ac.currentTime; [72,76,79,84,88,91].forEach((n, i) => envTone(midi(n), t + i * 0.055, 0.14, 'square', 0.11, sfxBus, null, 3000)); } },
     hit() { if (ac) { const t = ac.currentTime; noiseHit(t, 0.35, 0.2, 300); envTone(400, t, 0.48, 'sawtooth', 0.14, sfxBus, 60); } },
     splash() { if (ac) { const t = ac.currentTime; noiseHit(t, 0.38, 0.24, 500); envTone(260, t, 0.26, 'sine', 0.16, sfxBus, 85); } },
+    pipe() { if (ac) { const t = ac.currentTime; [72,67,64,60].forEach((n, i) => envTone(midi(n), t + i * 0.055, 0.12, 'triangle', 0.14, sfxBus)); } },
     buy() { if (ac) { const t = ac.currentTime; envTone(988, t, 0.07, 'square', 0.12, sfxBus); envTone(1319, t + 0.06, 0.16, 'square', 0.13, sfxBus); } },
     nope() { if (ac) envTone(160, ac.currentTime, 0.12, 'triangle', 0.12, sfxBus, 110); },
   };
@@ -268,8 +269,9 @@ function buyUpgrade(idx) {
 let state = 'ready';
 let score = 0, level = 1, best = +localStorage.getItem('shanti_best') || 0;
 let tick = 0, speed = BASE_SPEED, groundX = 0, bgX = 0, rainbow = 0, shieldHits = 0, shake = 0, flash = 0;
-let items = [], cats = [], crows = [], gaps = [], logs = [], parts = [], pops = [], trail = [];
-let spawnIn = 60, catIn = 240, crowIn = 320, gapIn = 280, overAt = 0, banner = { text: '', life: 0 };
+let items = [], cats = [], crows = [], gaps = [], logs = [], holes = [], parts = [], pops = [], trail = [];
+let spawnIn = 60, catIn = 240, crowIn = 320, gapIn = 280, holeIn = 260, overAt = 0, banner = { text: '', life: 0 };
+let zone = 'surface', ugTimer = 0, safeTimer = 0, exitGeyser = null;
 
 // Живые детали фона (облака, птички, бабочки)
 const clouds = [
@@ -293,8 +295,9 @@ const dog = { h: 0, vy: 0, onGround: true, runT: 0, squash: 0, coyote: 0, buffer
 
 function reset() {
   score = 0; level = 1; tick = 0; speed = BASE_SPEED; rainbow = 0; shieldHits = upg.shield; shake = 0; flash = 0;
-  items = []; cats = []; crows = []; gaps = []; logs = []; parts = []; pops = []; trail = [];
-  spawnIn = 55; catIn = 230; crowIn = 260; gapIn = 260;
+  items = []; cats = []; crows = []; gaps = []; logs = []; holes = []; parts = []; pops = []; trail = [];
+  spawnIn = 55; catIn = 230; crowIn = 260; gapIn = 260; holeIn = 240;
+  zone = 'surface'; ugTimer = 0; safeTimer = 0; exitGeyser = null;
   banner = { text: '', life: 0 }; lastRank = -1; earnedCoins = 0; showShop = false; showBoard = false;
   dog.h = 0; dog.vy = 0; dog.onGround = true; dog.squash = 0; dog.landT = 0;
   dog.airJumps = upg.djump > 0 ? 1 : 0;
@@ -437,6 +440,46 @@ function spawnCrow() {
   crows.push({ x: W + 70, y: baseY, baseY, w: 92, t: 0, extraSpeed: 2.2 + level * 0.35 });
 }
 
+function spawnHole() {
+  holes.push({ x: W + 80, w: 92 });
+}
+
+function spawnUndergroundItems() {
+  const r = Math.random();
+  const type = r < 0.45 ? 'bone' : (r < 0.70 ? 'food' : (r < 0.85 ? 'water' : (r < 0.95 ? 'cupcake' : 'shield')));
+  const tierRoll = Math.random();
+  const baseCy = tierRoll < 0.35 ? FLOOR - 30 : (tierRoll < 0.72 ? UPPER_Y : SKY_Y);
+  const count = (type === 'cupcake' || type === 'shield') ? 1 : 3;
+  const w = ITEM_W[type], im = img[type];
+  const h = im && im.naturalWidth ? w * im.naturalHeight / im.naturalWidth : w;
+  for (let i = 0; i < count; i++) {
+    const arc = count > 1 ? Math.sin((i / (count - 1)) * Math.PI) * 26 : 0;
+    items.push({ type, x: W + 40 + i * 62, cy: baseCy - arc, w, h, bob: Math.random() * 6 });
+  }
+}
+
+function enterUnderground() {
+  zone = 'underground'; ugTimer = 680; exitGeyser = null;
+  cats = []; crows = []; gaps = []; logs = []; holes = []; items = [];
+  dog.h = 180; dog.vy = -4; dog.onGround = false;
+  flash = 10; shake = 6;
+  Sound.pipe();
+  banner = { text: 'ПОДЗЕМНЫЙ БОНУС!', life: 95 };
+  sparkle(DOG_X, FLOOR - 10, ['110,235,255', '255,215,90'], 20);
+  spawnUndergroundItems();
+}
+
+function exitUnderground() {
+  zone = 'surface'; ugTimer = 0; exitGeyser = null; items = [];
+  dog.h = 45; dog.vy = JUMP_V * 1.12; dog.onGround = false;
+  dog.airJumps = upg.djump > 0 ? 1 : 0;
+  safeTimer = 95;
+  flash = 10; shake = 6;
+  Sound.levelUp();
+  banner = { text: 'НА ПОВЕРХНОСТЬ!', life: 85 };
+  sparkle(DOG_X, FLOOR - 20, ['110,255,150', '255,230,110'], 22);
+}
+
 function spawnGap() {
   const wide = level >= 2 && Math.random() < 0.62;
   const w = wide ? 290 + Math.random() * 110 : 135 + Math.random() * 38;
@@ -552,7 +595,16 @@ function update() {
     trail.pop();
   }
 
-  // Движение рек/пропастей и брёвен
+  if (safeTimer > 0) safeTimer--;
+  // Движение дыр, рек/пропастей и брёвен
+  for (let i = holes.length - 1; i >= 0; i--) {
+    holes[i].x -= speed;
+    if (zone === 'surface' && dog.onGround && Math.abs(DOG_X - holes[i].x) < holes[i].w * 0.40) {
+      enterUnderground();
+      return;
+    }
+    if (holes[i].x + holes[i].w < -80) holes.splice(i, 1);
+  }
   for (let i = gaps.length - 1; i >= 0; i--) {
     gaps[i].x -= speed;
     if (gaps[i].x + gaps[i].w < -80) gaps.splice(i, 1);
@@ -562,32 +614,66 @@ function update() {
     if (logs[i].x + logs[i].w < -80) logs.splice(i, 1);
   }
 
-  if (--spawnIn <= 0) {
-    spawnItems();
-    spawnIn = Math.max(26, Math.floor((360 + Math.random() * 200) / speed));
-  }
-  if (level >= 2 && --gapIn <= 0) {
-    const lastCat = cats[cats.length - 1];
-    if (!lastCat || lastCat.x < W - 180) {
-      spawnGap();
-      gapIn = Math.max(220, 400 - level * 22) + Math.random() * 180;
-      catIn = Math.max(catIn, 120);
-    } else gapIn = 30;
-  }
-  if (--catIn <= 0) {
-    const last = items[items.length - 1];
-    const lastGap = gaps[gaps.length - 1];
-    const nearGap = lastGap && lastGap.x + lastGap.w > W - 140;
-    if ((!last || last.x < W - 90) && !nearGap) {
-      spawnCat();
-      const minGap = Math.max(105, 220 - level * 14);
-      catIn = minGap + Math.random() * Math.max(90, 210 - level * 12);
-      spawnIn = Math.max(spawnIn, 48);
-    } else catIn = 18;
-  }
-  if ((level >= 2 || upg.djump > 0) && --crowIn <= 0) {
-    spawnCrow();
-    crowIn = Math.max(140, 290 - level * 18) + Math.random() * 140;
+  if (zone === 'underground') {
+    if (ugTimer > 0) ugTimer--;
+    if (--spawnIn <= 0 && ugTimer > 50) {
+      spawnUndergroundItems();
+      spawnIn = Math.max(22, Math.floor(240 / speed));
+    }
+    if (ugTimer <= 0 && !exitGeyser) {
+      exitGeyser = { x: W + 90, w: 86 };
+    }
+    if (exitGeyser) {
+      exitGeyser.x -= speed;
+      if (tick % 2 === 0) {
+        parts.push({ x: exitGeyser.x + (Math.random() - 0.5) * 44, y: FLOOR, vx: -speed * 0.25, vy: -3.5 - Math.random() * 2.5,
+          life: 24, max: 24, r: 3.5, col: '110,255,170', g: -0.05 });
+      }
+      if (Math.abs(DOG_X - exitGeyser.x) < 46) {
+        exitUnderground();
+        return;
+      }
+      if (exitGeyser.x < -100) exitUnderground();
+    }
+  } else {
+    if (--spawnIn <= 0) {
+      spawnItems();
+      spawnIn = Math.max(26, Math.floor((360 + Math.random() * 200) / speed));
+    }
+    if (--holeIn <= 0) {
+      const lastGap = gaps[gaps.length - 1];
+      const lastCat = cats[cats.length - 1];
+      if ((!lastGap || lastGap.x + lastGap.w < W - 160) && (!lastCat || lastCat.x < W - 150)) {
+        spawnHole();
+        holeIn = 340 + Math.random() * 240;
+        catIn = Math.max(catIn, 90);
+      } else holeIn = 35;
+    }
+    if (level >= 2 && --gapIn <= 0) {
+      const lastCat = cats[cats.length - 1];
+      const lastHole = holes[holes.length - 1];
+      if ((!lastCat || lastCat.x < W - 180) && (!lastHole || lastHole.x < W - 160)) {
+        spawnGap();
+        gapIn = Math.max(220, 400 - level * 22) + Math.random() * 180;
+        catIn = Math.max(catIn, 120);
+      } else gapIn = 30;
+    }
+    if (--catIn <= 0) {
+      const last = items[items.length - 1];
+      const lastGap = gaps[gaps.length - 1];
+      const lastHole = holes[holes.length - 1];
+      const nearObs = (lastGap && lastGap.x + lastGap.w > W - 140) || (lastHole && lastHole.x + lastHole.w > W - 120);
+      if ((!last || last.x < W - 90) && !nearObs) {
+        spawnCat();
+        const minGap = Math.max(105, 220 - level * 14);
+        catIn = minGap + Math.random() * Math.max(90, 210 - level * 12);
+        spawnIn = Math.max(spawnIn, 48);
+      } else catIn = 18;
+    }
+    if ((level >= 2 || upg.djump > 0) && --crowIn <= 0) {
+      spawnCrow();
+      crowIn = Math.max(140, 290 - level * 18) + Math.random() * 140;
+    }
   }
 
   const dx = DOG_X, dy = FLOOR - 36 - dog.h;
@@ -639,6 +725,7 @@ function update() {
     c.x -= speed + c.extraSpeed; c.t += c.fast ? 0.27 : 0.2;
     const cx = c.x, cy = FLOOR - 28;
     if (Math.abs(cx - dx) < c.w * 0.31 + box.w / 2 - 8 && Math.abs(cy - dy) < 26 + box.h / 2 - 6) {
+      if (safeTimer > 0) continue;
       if (shieldHits > 0) {
         shieldHits = 0; c.knocked = true; c.yOff = 0; c.vy = -12; c.rot = 0;
         score += 3; shake = 8; flash = 5; Sound.shieldBreak(); haptic('medium');
@@ -663,6 +750,7 @@ function update() {
     cr.t += 0.22;
     cr.y = cr.baseY + Math.sin(cr.t * 0.55) * 9;
     if (Math.abs(cr.x - dx) < 34 + box.w / 2 - 12 && Math.abs(cr.y - dy) < 22 + box.h / 2 - 10) {
+      if (safeTimer > 0) continue;
       if (shieldHits > 0) {
         shieldHits = 0; cr.knocked = true; cr.vy = -10; cr.rot = 0;
         score += 4; shake = 8; flash = 5; Sound.shieldBreak(); haptic('medium');
@@ -685,7 +773,8 @@ function update() {
 function endRun() {
   state = 'over'; overAt = performance.now(); shake = 14; flash = 10;
   dog.h = 0; dog.vy = 0; dog.onGround = true; dog.landT = 0;
-  banner.life = 0; cats = []; crows = []; gaps = []; logs = []; trail = [];
+  zone = 'surface'; ugTimer = 0; safeTimer = 0; exitGeyser = null;
+  banner.life = 0; cats = []; crows = []; gaps = []; logs = []; holes = []; trail = [];
   Sound.hit(); Sound.setMode('chill'); Sound.musicStart('chill'); haptic('heavy');
   if (score > best) { best = score; localStorage.setItem('shanti_best', best); }
   lastRank = saveScore(score, level);
@@ -693,6 +782,39 @@ function endRun() {
   if (earnedCoins > 0) { coins += earnedCoins; localStorage.setItem('shanti_coins', coins); }
 }
 function drawBg() {
+  if (zone === 'underground') {
+    // Подземная пещера со светящимися кристаллами и корнями сверху
+    const cg = ctx.createLinearGradient(0, 0, 0, H);
+    cg.addColorStop(0, '#160d24');
+    cg.addColorStop(0.55, '#26173d');
+    cg.addColorStop(1, '#36214d');
+    ctx.fillStyle = cg;
+    ctx.fillRect(0, 0, W, H);
+
+    // Дальние каменные столбы и светящиеся кристаллы (параллакс)
+    const off = (bgX * 1.4) % 200;
+    for (let x = -off; x < W + 200; x += 200) {
+      ctx.fillStyle = 'rgba(20, 12, 34, 0.55)';
+      ctx.fillRect(x + 40, 30, 42, GROUND_TOP);
+      // Светящийся кристалл
+      ctx.save();
+      ctx.fillStyle = 'rgba(90, 225, 255, 0.32)';
+      ctx.beginPath(); ctx.moveTo(x + 130, GROUND_TOP); ctx.lineTo(x + 144, GROUND_TOP - 42); ctx.lineTo(x + 158, GROUND_TOP); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = 'rgba(180, 120, 255, 0.35)';
+      ctx.beginPath(); ctx.moveTo(x + 152, GROUND_TOP); ctx.lineTo(x + 162, GROUND_TOP - 26); ctx.lineTo(x + 172, GROUND_TOP); ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+    // Потолок пещеры и корни сверху
+    ctx.fillStyle = '#332018';
+    ctx.fillRect(0, 0, W, 34);
+    ctx.fillStyle = '#4d3224';
+    const rOff = (groundX * 0.6) % 160;
+    for (let x = -rOff; x < W + 160; x += 160) {
+      ctx.beginPath(); ctx.moveTo(x, 34); ctx.lineTo(x + 16, 68); ctx.lineTo(x + 32, 34); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(x + 80, 34); ctx.lineTo(x + 90, 56); ctx.lineTo(x + 102, 34); ctx.closePath(); ctx.fill();
+    }
+    return;
+  }
   // 1. Бесшовная движущаяся панорама пейзажа
   if (img.bg.naturalWidth) {
     const x0 = -Math.floor(bgX);
@@ -761,6 +883,35 @@ function drawBg() {
 }
 
 function drawGround() {
+  if (zone === 'underground') {
+    const ug = ctx.createLinearGradient(0, GROUND_TOP, 0, H);
+    ug.addColorStop(0, '#5a3a28');
+    ug.addColorStop(0.2, '#432a1d');
+    ug.addColorStop(1, '#271710');
+    ctx.fillStyle = ug;
+    ctx.fillRect(0, GROUND_TOP, W, H - GROUND_TOP);
+    ctx.fillStyle = '#734b35';
+    ctx.fillRect(0, GROUND_TOP, W, 6);
+    const kOff = groundX % 120;
+    ctx.fillStyle = 'rgba(255, 220, 180, 0.12)';
+    for (let x = -kOff; x < W + 120; x += 120) {
+      ctx.beginPath(); ctx.ellipse(x + 30, FLOOR + 12, 16, 5, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(x + 85, FLOOR + 24, 11, 4, 0, 0, Math.PI * 2); ctx.fill();
+    }
+    if (exitGeyser) {
+      ctx.save();
+      const gg = ctx.createLinearGradient(0, 60, 0, FLOOR + 8);
+      gg.addColorStop(0, 'rgba(90, 255, 160, 0)');
+      gg.addColorStop(1, 'rgba(90, 255, 160, 0.52)');
+      ctx.fillStyle = gg;
+      ctx.fillRect(exitGeyser.x - exitGeyser.w / 2, 60, exitGeyser.w, FLOOR - 52);
+      ctx.fillStyle = '#4cd964';
+      ctx.beginPath(); ctx.ellipse(exitGeyser.x, FLOOR + 4, exitGeyser.w * 0.5, 10, 0, 0, Math.PI * 2); ctx.fill();
+      text('⬆ НАВЕРХ!', exitGeyser.x, FLOOR - 75, 18, '#a8ffbf');
+      ctx.restore();
+    }
+    return;
+  }
   // Мягкая тень перехода между лугом фона и передней дорожкой
   const seamG = ctx.createLinearGradient(0, GROUND_TOP - 14, 0, GROUND_TOP + 18);
   seamG.addColorStop(0, 'rgba(65, 105, 45, 0)');
@@ -787,6 +938,24 @@ function drawGround() {
     ctx.fill();
   }
   ctx.restore();
+
+  // Норы (дырки в полу для входа на подземный бонус-уровень)
+  for (const h of holes) {
+    ctx.save();
+    // Земляной ободок и тёмный вход
+    ctx.fillStyle = '#4d321d';
+    ctx.beginPath(); ctx.ellipse(h.x, FLOOR + 4, h.w * 0.52, 14, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#140c1c';
+    ctx.beginPath(); ctx.ellipse(h.x, FLOOR + 4, h.w * 0.42, 10, 0, 0, Math.PI * 2); ctx.fill();
+    // Светящаяся золотисто-бирюзовая аура
+    const hg = ctx.createRadialGradient(h.x, FLOOR + 4, 4, h.x, FLOOR + 4, h.w * 0.5);
+    hg.addColorStop(0, 'rgba(90, 235, 255, 0.55)');
+    hg.addColorStop(1, 'rgba(90, 235, 255, 0)');
+    ctx.fillStyle = hg;
+    ctx.beginPath(); ctx.ellipse(h.x, FLOOR - 6, h.w * 0.5, 22, 0, 0, Math.PI * 2); ctx.fill();
+    text('⬇ БОНУС', h.x, FLOOR - 24 + Math.sin(tick * 0.14) * 3, 14, '#7ce8ff');
+    ctx.restore();
+  }
 
   // Реки, пропасти и плывущие брёвна
   for (const g of gaps) {
@@ -905,6 +1074,7 @@ function drawDog() {
   ctx.beginPath(); ctx.ellipse(DOG_X, FLOOR + 3, 62 * Math.max(0.5, 1 - dog.h / 400), 8, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
 
   ctx.save();
+  if (safeTimer > 0 && Math.floor(safeTimer / 4) % 2 === 1) ctx.globalAlpha = 0.55;
   ctx.translate(DOG_X, FLOOR - dog.h);
   ctx.scale(1 + sq * 0.5, 1 - sq * 0.5);
   ctx.imageSmoothingEnabled = true;
